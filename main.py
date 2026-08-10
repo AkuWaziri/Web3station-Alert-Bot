@@ -14,6 +14,11 @@ import requests
 import feedparser
 from datetime import datetime, timezone, timedelta
 
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+}
+
 # ---------- CONFIG ----------
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
@@ -50,7 +55,6 @@ def load_seen():
 
 
 def save_seen(seen):
-    # keep only last 2000 to avoid unbounded growth
     trimmed = list(seen)[-2000:]
     with open(SEEN_FILE, "w") as f:
         json.dump(trimmed, f)
@@ -62,8 +66,7 @@ def item_id(title, link):
 
 def score_item(title, summary=""):
     text = (title + " " + summary).lower()
-    score = sum(1 for kw in KEYWORDS_HOT if kw in text)
-    return score
+    return sum(1 for kw in KEYWORDS_HOT if kw in text)
 
 
 def send_telegram(text):
@@ -83,7 +86,8 @@ def send_telegram(text):
 def fetch_rss(name, url, cutoff):
     items = []
     try:
-        feed = feedparser.parse(url)
+        resp = requests.get(url, headers=HEADERS, timeout=15)
+        feed = feedparser.parse(resp.content)
         for entry in feed.entries:
             title = entry.get("title", "").strip()
             link = entry.get("link", "")
@@ -112,7 +116,7 @@ def fetch_cryptopanic(cutoff):
         return items
     try:
         url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&kind=news&public=true"
-        r = requests.get(url, timeout=15)
+        r = requests.get(url, headers=HEADERS, timeout=15)
         data = r.json()
         for post in data.get("results", []):
             pub_dt = datetime.fromisoformat(post["published_at"].replace("Z", "+00:00"))
@@ -133,7 +137,7 @@ def fetch_cryptopanic(cutoff):
 def fetch_coingecko_trending():
     items = []
     try:
-        r = requests.get("https://api.coingecko.com/api/v3/search/trending", timeout=15)
+        r = requests.get("https://api.coingecko.com/api/v3/search/trending", headers=HEADERS, timeout=15)
         data = r.json()
         now = datetime.now(timezone.utc)
         for coin in data.get("coins", [])[:7]:
@@ -143,7 +147,7 @@ def fetch_coingecko_trending():
                 "title": f"🔥 Trending: {c['name']} ({c['symbol'].upper()}) - rank #{c.get('market_cap_rank', 'N/A')}",
                 "link": f"https://www.coingecko.com/en/coins/{c['id']}",
                 "summary": "",
-                "published": now,  # trending is always "now"
+                "published": now,
             })
     except Exception as e:
         print(f"CoinGecko fetch failed: {e}")
@@ -154,18 +158,25 @@ def fetch_coingecko_trending():
 def main():
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=RECENCY_HOURS)
-    soon_cutoff = now + timedelta(hours=ENDING_SOON_HOURS)
 
     seen = load_seen()
     all_items = []
 
     for name, url in RSS_FEEDS.items():
-        all_items.extend(fetch_rss(name, url, cutoff))
+        fetched = fetch_rss(name, url, cutoff)
+        print(f"{name}: fetched {len(fetched)} items")
+        all_items.extend(fetched)
 
-    all_items.extend(fetch_cryptopanic(cutoff))
-    all_items.extend(fetch_coingecko_trending())
+    cp_items = fetch_cryptopanic(cutoff)
+    print(f"CryptoPanic: fetched {len(cp_items)} items")
+    all_items.extend(cp_items)
 
-    # filter unseen + score
+    cg_items = fetch_coingecko_trending()
+    print(f"CoinGecko: fetched {len(cg_items)} items")
+    all_items.extend(cg_items)
+
+    print(f"Total items fetched: {len(all_items)}")
+
     new_items = []
     for it in all_items:
         iid = item_id(it["title"], it["link"])
@@ -175,16 +186,12 @@ def main():
         it["id"] = iid
         new_items.append(it)
 
-    # sort: highest score first, then most recent
+    print(f"New (unseen) items: {len(new_items)}")
+
     new_items.sort(key=lambda x: (x["score"], x["published"]), reverse=True)
 
-    # push items with signal first; if none, fall back to most recent items
-    # so the channel doesn't go silent on quiet news cycles
     scored = [it for it in new_items if it["score"] > 0]
-    if scored:
-        to_send = scored[:12]
-    else:
-        to_send = new_items[:5]
+    to_send = scored[:12] if scored else new_items[:5]
 
     if not to_send:
         print("No new relevant items this run.")
@@ -200,7 +207,7 @@ def main():
         )
         send_telegram(msg)
         seen.add(it["id"])
-        time.sleep(1)  # avoid Telegram rate limits
+        time.sleep(1)
 
     save_seen(seen)
     print(f"Sent {len(to_send)} alerts.")
