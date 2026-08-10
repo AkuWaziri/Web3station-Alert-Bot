@@ -68,14 +68,61 @@ def build_hashtags(title, summary=""):
     return " ".join(tags[:3])
 
 
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+
+TWEET_SYSTEM_PROMPT = (
+    "You are a sharp, well-connected crypto Twitter poster with a real point of view. "
+    "You write short, punchy takes that sound like a human who's actually paying attention "
+    "to the market, not a headline bot. Given a news item, write ONE tweet reacting to it: "
+    "connect it to a broader trend, add a hot take or a 'here's what this actually means' angle, "
+    "and end with something that invites replies (a question, a bold claim, or a prediction). "
+    "No hashtags spam (max 2, only if they fit naturally). No emojis unless they add punch (max 2). "
+    "Sound confident and specific, not generic. Hard limit: 280 characters. "
+    "Output ONLY the tweet text, nothing else."
+)
+
+
+def generate_tweet_llm(item):
+    if not GROQ_API_KEY:
+        return None
+    try:
+        prompt = f"News: {item['title']}\n{item.get('summary', '')[:400]}"
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": TWEET_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+                "temperature": 0.9,
+                "max_tokens": 150,
+            },
+            timeout=20,
+        )
+        data = r.json()
+        text = data["choices"][0]["message"]["content"].strip()
+        text = text.strip('"')
+        if len(text) > 280:
+            text = text[:277] + "..."
+        return text
+    except Exception as e:
+        print(f"Groq tweet generation failed: {e}")
+        return None
+
+
 def generate_tweet_draft(item):
+    llm_draft = generate_tweet_llm(item)
+    if llm_draft:
+        return llm_draft
+    # fallback template if Groq is unavailable or key missing
     hook = TWEET_HOOKS[item["score"] % len(TWEET_HOOKS)]
     title = item["title"]
     if len(title) > 180:
         title = title[:177] + "..."
     hashtags = build_hashtags(item["title"], item.get("summary", ""))
-    draft = hook.format(title=title) + f"\n\n{hashtags}"
-    return draft
+    return hook.format(title=title) + f"\n\n{hashtags}"
 
 RSS_FEEDS = {
     "CoinTelegraph": "https://cointelegraph.com/rss",
