@@ -34,6 +34,49 @@ KEYWORDS_HOT = [
     "meme", "pump", "moon", "breaking", "alert", "vulnerability", "drain",
 ]
 
+TWEET_HOOKS = [
+    "🚨 {title}\n\nWhat's your take? 👇",
+    "Just in: {title}\n\nBullish or bearish? 🤔",
+    "This is huge 👀\n\n{title}\n\nThoughts?",
+    "{title}\n\nEveryone's talking about this right now.",
+    "Hot off the press 🔥\n\n{title}",
+    "PSA for the timeline 📢\n\n{title}",
+]
+
+HASHTAG_MAP = {
+    "airdrop": ["#Airdrop", "#CryptoAirdrop"],
+    "nft": ["#NFT", "#NFTCommunity"],
+    "hack": ["#CryptoSecurity", "#Web3Safety"],
+    "exploit": ["#CryptoSecurity", "#Web3Safety"],
+    "mint": ["#NFTMint"],
+    "meme": ["#CryptoMemes", "#MemeCoin"],
+    "trending": ["#Crypto", "#Altcoins"],
+}
+DEFAULT_HASHTAGS = ["#Crypto", "#Web3"]
+
+
+def build_hashtags(title, summary=""):
+    text = (title + " " + summary).lower()
+    tags = []
+    for kw, tag_list in HASHTAG_MAP.items():
+        if kw in text:
+            for t in tag_list:
+                if t not in tags:
+                    tags.append(t)
+    if not tags:
+        tags = DEFAULT_HASHTAGS
+    return " ".join(tags[:3])
+
+
+def generate_tweet_draft(item):
+    hook = TWEET_HOOKS[item["score"] % len(TWEET_HOOKS)]
+    title = item["title"]
+    if len(title) > 180:
+        title = title[:177] + "..."
+    hashtags = build_hashtags(item["title"], item.get("summary", ""))
+    draft = hook.format(title=title) + f"\n\n{hashtags}"
+    return draft
+
 RSS_FEEDS = {
     "CoinTelegraph": "https://cointelegraph.com/rss",
     "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -200,10 +243,12 @@ def main():
     for it in to_send:
         age_hrs = round((now - it["published"]).total_seconds() / 3600, 1)
         emoji = "🚨" if it["score"] >= 3 else "📢"
+        tweet_draft = generate_tweet_draft(it)
         msg = (
             f"{emoji} <b>{it['title']}</b>\n"
             f"Source: {it['source']} | {age_hrs}h ago\n"
-            f"{it['link']}"
+            f"{it['link']}\n\n"
+            f"✍️ <b>Tweet draft:</b>\n{tweet_draft}"
         )
         send_telegram(msg)
         seen.add(it["id"])
