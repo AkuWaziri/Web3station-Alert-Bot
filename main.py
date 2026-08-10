@@ -143,7 +143,7 @@ def fetch_coingecko_trending():
                 "title": f"🔥 Trending: {c['name']} ({c['symbol'].upper()}) - rank #{c.get('market_cap_rank', 'N/A')}",
                 "link": f"https://www.coingecko.com/en/coins/{c['id']}",
                 "summary": "",
-                "published": now,  # trending is always \"now\"
+                "published": now,  # trending is always "now"
             })
     except Exception as e:
         print(f"CoinGecko fetch failed: {e}")
@@ -178,8 +178,13 @@ def main():
     # sort: highest score first, then most recent
     new_items.sort(key=lambda x: (x["score"], x["published"]), reverse=True)
 
-    # only push items with at least some signal, cap to avoid spam
-    to_send = [it for it in new_items if it["score"] > 0][:12]
+    # push items with signal first; if none, fall back to most recent items
+    # so the channel doesn't go silent on quiet news cycles
+    scored = [it for it in new_items if it["score"] > 0]
+    if scored:
+        to_send = scored[:12]
+    else:
+        to_send = new_items[:5]
 
     if not to_send:
         print("No new relevant items this run.")
