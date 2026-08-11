@@ -1,12 +1,15 @@
 """
-Crypto/NFT Alert Bot
-Fetches recent crypto/NFT news, campaigns, and trending content from free sources,
-filters for recency + relevance, and pushes formatted alerts to Telegram.
+Crypto/NFT Intelligence Bot
+Collects crypto/NFT/DeFi/AI-crypto signal from free sources, then runs it through
+an LLM "editor" pass that aggressively filters down to only genuine content
+opportunities -- important, trending, surprising, controversial, or connected to
+your watched protocols -- and generates ready-to-post drafts for each.
 
 Runs on a schedule via GitHub Actions (see .github/workflows/alert.yml)
 """
 
 import os
+import re
 import json
 import time
 import hashlib
@@ -22,107 +25,22 @@ HEADERS = {
 # ---------- CONFIG ----------
 TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-CRYPTOPANIC_KEY = os.environ.get("CRYPTOPANIC_KEY", "")  # optional, empty ok
-
-RECENCY_HOURS = 72
-ENDING_SOON_HOURS = 24
-SEEN_FILE = "seen_ids.json"  # persisted between runs via git commit (see workflow)
-
-KEYWORDS_HOT = [
-    "airdrop", "mint", "presale", "giveaway", "hack", "exploit", "rug",
-    "listing", "launch", "campaign", "whitelist", "claim", "reward",
-    "meme", "pump", "moon", "breaking", "alert", "vulnerability", "drain",
-]
-
-TWEET_HOOKS = [
-    "🚨 {title}\n\nWhat's your take? 👇",
-    "Just in: {title}\n\nBullish or bearish? 🤔",
-    "This is huge 👀\n\n{title}\n\nThoughts?",
-    "{title}\n\nEveryone's talking about this right now.",
-    "Hot off the press 🔥\n\n{title}",
-    "PSA for the timeline 📢\n\n{title}",
-]
-
-HASHTAG_MAP = {
-    "airdrop": ["#Airdrop", "#CryptoAirdrop"],
-    "nft": ["#NFT", "#NFTCommunity"],
-    "hack": ["#CryptoSecurity", "#Web3Safety"],
-    "exploit": ["#CryptoSecurity", "#Web3Safety"],
-    "mint": ["#NFTMint"],
-    "meme": ["#CryptoMemes", "#MemeCoin"],
-    "trending": ["#Crypto", "#Altcoins"],
-}
-DEFAULT_HASHTAGS = ["#Crypto", "#Web3"]
-
-
-def build_hashtags(title, summary=""):
-    text = (title + " " + summary).lower()
-    tags = []
-    for kw, tag_list in HASHTAG_MAP.items():
-        if kw in text:
-            for t in tag_list:
-                if t not in tags:
-                    tags.append(t)
-    if not tags:
-        tags = DEFAULT_HASHTAGS
-    return " ".join(tags[:3])
-
-
+CRYPTOPANIC_KEY = os.environ.get("CRYPTOPANIC_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-TWEET_SYSTEM_PROMPT = (
-    "You are a sharp, well-connected crypto Twitter poster with a real point of view. "
-    "You write short, punchy takes that sound like a human who's actually paying attention "
-    "to the market, not a headline bot. Given a news item, write ONE tweet reacting to it: "
-    "connect it to a broader trend, add a hot take or a 'here's what this actually means' angle, "
-    "and end with something that invites replies (a question, a bold claim, or a prediction). "
-    "No hashtags spam (max 2, only if they fit naturally). No emojis unless they add punch (max 2). "
-    "Sound confident and specific, not generic. Hard limit: 280 characters. "
-    "Output ONLY the tweet text, nothing else."
-)
+# comma-separated list of protocols you actively watch/follow
+PROTOCOLS = [p.strip() for p in os.environ.get("PROTOCOLS", "Arc Network,Base").split(",") if p.strip()]
 
+# your content focus areas -- edit this list any time to steer the editor
+CONTENT_AREAS = [
+    "Crypto", "DeFi", "AI x Crypto", "AI agents", "Stablecoins", "RWA",
+    "Onchain activity", "Wallet infrastructure", "Payments", "Airdrops",
+    "Protocol launches", "Crypto culture", "Emerging narratives", "Crypto memes",
+]
 
-def generate_tweet_llm(item):
-    if not GROQ_API_KEY:
-        return None
-    try:
-        prompt = f"News: {item['title']}\n{item.get('summary', '')[:400]}"
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": TWEET_SYSTEM_PROMPT},
-                    {"role": "user", "content": prompt},
-                ],
-                "temperature": 0.9,
-                "max_tokens": 150,
-            },
-            timeout=20,
-        )
-        data = r.json()
-        text = data["choices"][0]["message"]["content"].strip()
-        text = text.strip('"')
-        if len(text) > 280:
-            text = text[:277] + "..."
-        return text
-    except Exception as e:
-        print(f"Groq tweet generation failed: {e}")
-        return None
-
-
-def generate_tweet_draft(item):
-    llm_draft = generate_tweet_llm(item)
-    if llm_draft:
-        return llm_draft
-    # fallback template if Groq is unavailable or key missing
-    hook = TWEET_HOOKS[item["score"] % len(TWEET_HOOKS)]
-    title = item["title"]
-    if len(title) > 180:
-        title = title[:177] + "..."
-    hashtags = build_hashtags(item["title"], item.get("summary", ""))
-    return hook.format(title=title) + f"\n\n{hashtags}"
+RECENCY_HOURS = 72
+SEEN_FILE = "seen_ids.json"
+MAX_ITEMS_TO_EDITOR = 70  # cap prompt size
 
 RSS_FEEDS = {
     "CoinTelegraph": "https://cointelegraph.com/rss",
@@ -133,6 +51,7 @@ RSS_FEEDS = {
     "Reddit-CryptoCurrency": "https://www.reddit.com/r/CryptoCurrency/new/.rss",
     "Reddit-NFT": "https://www.reddit.com/r/NFT/new/.rss",
     "Reddit-CryptoMoonShots": "https://www.reddit.com/r/CryptoMoonShots/new/.rss",
+    "Reddit-defi": "https://www.reddit.com/r/defi/new/.rss",
 }
 
 
@@ -145,18 +64,13 @@ def load_seen():
 
 
 def save_seen(seen):
-    trimmed = list(seen)[-2000:]
+    trimmed = list(seen)[-3000:]
     with open(SEEN_FILE, "w") as f:
         json.dump(trimmed, f)
 
 
 def item_id(title, link):
     return hashlib.sha256((title + link).encode()).hexdigest()[:16]
-
-
-def score_item(title, summary=""):
-    text = (title + " " + summary).lower()
-    return sum(1 for kw in KEYWORDS_HOT if kw in text)
 
 
 def send_telegram(text):
@@ -181,7 +95,7 @@ def fetch_rss(name, url, cutoff):
         for entry in feed.entries:
             title = entry.get("title", "").strip()
             link = entry.get("link", "")
-            summary = entry.get("summary", "")[:300]
+            summary = re.sub("<[^<]+?>", "", entry.get("summary", ""))[:280]
             published = entry.get("published_parsed") or entry.get("updated_parsed")
             if not published:
                 continue
@@ -234,7 +148,7 @@ def fetch_coingecko_trending():
             c = coin["item"]
             items.append({
                 "source": "CoinGecko Trending",
-                "title": f"🔥 Trending: {c['name']} ({c['symbol'].upper()}) - rank #{c.get('market_cap_rank', 'N/A')}",
+                "title": f"Trending on CoinGecko: {c['name']} ({c['symbol'].upper()}) - rank #{c.get('market_cap_rank', 'N/A')}",
                 "link": f"https://www.coingecko.com/en/coins/{c['id']}",
                 "summary": "",
                 "published": now,
@@ -242,6 +156,105 @@ def fetch_coingecko_trending():
     except Exception as e:
         print(f"CoinGecko fetch failed: {e}")
     return items
+
+
+# ---------- LLM EDITOR ----------
+def build_editor_system_prompt():
+    protocols_str = ", ".join(PROTOCOLS)
+    areas_str = ", ".join(CONTENT_AREAS)
+    return f"""You are a sharp, highly selective personal crypto editor. Your job is to look at a
+batch of raw crypto/NFT/DeFi news, Reddit posts, and trending signals, and pick out ONLY the items
+that represent a genuinely good opportunity for your user to create original X (Twitter) content.
+
+USER'S CONTENT FOCUS AREAS: {areas_str}
+PROTOCOLS THE USER ACTIVELY FOLLOWS: {protocols_str}
+
+FILTER AGGRESSIVELY. Most items should be REJECTED. Only pick items that are:
+- important, rapidly trending, surprising, or controversial
+- useful or under-covered (not something everyone already posted about)
+- relevant to the user's content focus areas above
+- connected to one of the user's followed protocols, OR
+- capable of producing a genuinely original insight or meme
+
+It is completely fine and expected to return an EMPTY list if nothing in the batch is worth posting about.
+Do not force opportunities that aren't there. No artificial shilling of the followed protocols --
+only mention a protocol connection if it's real and natural.
+
+For each item you select, determine:
+- priority: "BREAKING" (urgent, send now), "HIGH" (strong opportunity, send now), or "DAILY" (good but can wait for a digest)
+- why_now: 1-2 short bullet-style reasons this deserves attention right now
+- protocol_connection: if relevant to a followed protocol, explain the natural connection; otherwise null
+- angle: the single strongest angle to take (analytical, contrarian, educational, humorous/meme, or "what people are missing") -- pick the angle with the most intellectual value, not automatically the most bullish one
+- draft_post: ONE ready-to-post X draft in the chosen angle. Sound like a real, sharp crypto-native person:
+  concise, specific, some personality, skepticism where warranted. NEVER use phrases like "this changes
+  everything", "the future is here", "revolutionary" unless truly warranted. No hashtag spam (max 1-2 if
+  natural). No corporate/marketing tone. No forced excitement. Hard limit 280 characters.
+- is_meme: true if this is primarily a meme/culture opportunity rather than a news opportunity
+
+Respond with ONLY valid JSON, no markdown fences, no commentary, in this exact shape:
+{{"opportunities": [
+  {{"priority": "HIGH", "headline": "...", "why_now": "...", "protocol_connection": null,
+    "angle": "contrarian", "draft_post": "...", "is_meme": false, "source_index": 3}}
+]}}
+
+source_index refers to the numbered item in the batch you were given, so the user can trace back to the original source."""
+
+
+def call_groq_editor(items):
+    if not GROQ_API_KEY or not items:
+        return None
+    # build compact numbered batch
+    lines = []
+    for i, it in enumerate(items):
+        age_hrs = round((datetime.now(timezone.utc) - it["published"]).total_seconds() / 3600, 1)
+        lines.append(f"[{i}] ({it['source']}, {age_hrs}h ago) {it['title']} -- {it['summary'][:150]}")
+    batch_text = "\n".join(lines)
+
+    try:
+        r = requests.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
+            json={
+                "model": "llama-3.3-70b-versatile",
+                "messages": [
+                    {"role": "system", "content": build_editor_system_prompt()},
+                    {"role": "user", "content": f"Here is the batch of {len(items)} items:\n\n{batch_text}"},
+                ],
+                "temperature": 0.6,
+                "max_tokens": 3000,
+            },
+            timeout=45,
+        )
+        data = r.json()
+        text = data["choices"][0]["message"]["content"].strip()
+        # strip markdown fences if the model added them anyway
+        text = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
+        parsed = json.loads(text)
+        return parsed.get("opportunities", [])
+    except Exception as e:
+        print(f"Groq editor call failed: {e}")
+        return None
+
+
+# ---------- FORMATTING ----------
+PRIORITY_EMOJI = {"BREAKING": "🔴", "HIGH": "🟠", "DAILY": "🟡"}
+
+
+def format_opportunity(opp, source_item):
+    emoji = PRIORITY_EMOJI.get(opp.get("priority", "DAILY"), "🟡")
+    meme_tag = "😂 MEME OPPORTUNITY\n" if opp.get("is_meme") else ""
+    lines = [
+        f"{emoji} <b>{opp.get('headline', 'Untitled')}</b>",
+        meme_tag.strip(),
+        f"\n<b>Why now:</b> {opp.get('why_now', '')}",
+    ]
+    if opp.get("protocol_connection"):
+        lines.append(f"\n<b>Protocol angle:</b> {opp['protocol_connection']}")
+    lines.append(f"\n<b>Angle:</b> {opp.get('angle', '')}")
+    lines.append(f"\n✍️ <b>Draft:</b>\n{opp.get('draft_post', '')}")
+    if source_item:
+        lines.append(f"\nSource: {source_item['source']} | {source_item['link']}")
+    return "\n".join(l for l in lines if l.strip())
 
 
 # ---------- MAIN ----------
@@ -267,42 +280,64 @@ def main():
 
     print(f"Total items fetched: {len(all_items)}")
 
+    # filter unseen
     new_items = []
     for it in all_items:
         iid = item_id(it["title"], it["link"])
         if iid in seen:
             continue
-        it["score"] = score_item(it["title"], it["summary"])
         it["id"] = iid
         new_items.append(it)
 
     print(f"New (unseen) items: {len(new_items)}")
 
-    new_items.sort(key=lambda x: (x["score"], x["published"]), reverse=True)
-
-    scored = [it for it in new_items if it["score"] > 0]
-    to_send = scored[:12] if scored else new_items[:5]
-
-    if not to_send:
-        print("No new relevant items this run.")
+    if not new_items:
+        print("Nothing new this run.")
         return
 
-    for it in to_send:
-        age_hrs = round((now - it["published"]).total_seconds() / 3600, 1)
-        emoji = "🚨" if it["score"] >= 3 else "📢"
-        tweet_draft = generate_tweet_draft(it)
-        msg = (
-            f"{emoji} <b>{it['title']}</b>\n"
-            f"Source: {it['source']} | {age_hrs}h ago\n"
-            f"{it['link']}\n\n"
-            f"✍️ <b>Tweet draft:</b>\n{tweet_draft}"
-        )
-        send_telegram(msg)
-        seen.add(it["id"])
-        time.sleep(1)
+    # most recent first, cap batch size for the editor prompt
+    new_items.sort(key=lambda x: x["published"], reverse=True)
+    batch = new_items[:MAX_ITEMS_TO_EDITOR]
 
+    opportunities = call_groq_editor(batch)
+
+    if opportunities is None:
+        print("Editor call failed -- not sending anything this run (avoiding noisy fallback).")
+        return
+
+    if not opportunities:
+        print("Editor reviewed the batch and found nothing worth posting about. Staying quiet.")
+        # still mark batch as seen so we don't re-review the same items next run
+        for it in batch:
+            seen.add(it["id"])
+        save_seen(seen)
+        return
+
+    print(f"Editor selected {len(opportunities)} opportunities out of {len(batch)} candidates.")
+
+    # send BREAKING/HIGH immediately, bundle DAILY into one digest
+    daily_batch = []
+    for opp in opportunities:
+        idx = opp.get("source_index")
+        source_item = batch[idx] if isinstance(idx, int) and 0 <= idx < len(batch) else None
+        priority = opp.get("priority", "DAILY")
+        if priority in ("BREAKING", "HIGH"):
+            send_telegram(format_opportunity(opp, source_item))
+            time.sleep(1)
+        else:
+            daily_batch.append((opp, source_item))
+
+    if daily_batch:
+        digest_lines = ["🟡 <b>DAILY OPPORTUNITIES</b>\n"]
+        for opp, source_item in daily_batch:
+            digest_lines.append(format_opportunity(opp, source_item))
+            digest_lines.append("\n---\n")
+        send_telegram("\n".join(digest_lines))
+
+    for it in batch:
+        seen.add(it["id"])
     save_seen(seen)
-    print(f"Sent {len(to_send)} alerts.")
+    print(f"Sent {len(opportunities)} opportunities.")
 
 
 if __name__ == "__main__":
