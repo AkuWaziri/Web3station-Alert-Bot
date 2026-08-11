@@ -185,10 +185,17 @@ For each item you select, determine:
 - why_now: 1-2 short bullet-style reasons this deserves attention right now
 - protocol_connection: if relevant to a followed protocol, explain the natural connection; otherwise null
 - angle: the single strongest angle to take (analytical, contrarian, educational, humorous/meme, or "what people are missing") -- pick the angle with the most intellectual value, not automatically the most bullish one
-- draft_post: ONE ready-to-post X draft in the chosen angle. Sound like a real, sharp crypto-native person:
-  concise, specific, some personality, skepticism where warranted. NEVER use phrases like "this changes
-  everything", "the future is here", "revolutionary" unless truly warranted. No hashtag spam (max 1-2 if
-  natural). No corporate/marketing tone. No forced excitement. Hard limit 280 characters.
+- draft_post: ONE ready-to-post X draft in the chosen angle. Sound like a real, sharp crypto-native
+  professional with strong opinions: concise, specific, some personality, skepticism where warranted.
+  Make a clear, confident claim or observation -- do NOT default to ending with a question. Professional
+  content creators state a position and let people react to it; they don't beg for engagement with
+  "what's your take?", "thoughts?", "bullish or bearish?" or similar question hooks. A question is only
+  acceptable if it's genuinely the sharpest way to make the point (rare), not a default closer.
+  Vary the structure: sometimes a bold claim, sometimes a specific number/detail with an implication,
+  sometimes a contrarian statement, sometimes "everyone's saying X, but Y is what actually matters."
+  NEVER use phrases like "this changes everything", "the future is here", "revolutionary" unless truly
+  warranted. No hashtag spam (max 1-2 if natural). No corporate/marketing tone. No forced excitement.
+  Hard limit 280 characters.
 - is_meme: true if this is primarily a meme/culture opportunity rather than a news opportunity
 
 Respond with ONLY valid JSON, no markdown fences, no commentary, in this exact shape:
