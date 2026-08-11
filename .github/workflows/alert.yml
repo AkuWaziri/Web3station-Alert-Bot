@@ -30,6 +30,7 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          PROTOCOLS: ${{ secrets.PROTOCOLS }}
         run: python main.py
 
       - name: Commit updated seen_ids.json
