@@ -27,6 +27,7 @@ TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
 TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 CRYPTOPANIC_KEY = os.environ.get("CRYPTOPANIC_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
+NEYNAR_API_KEY = os.environ.get("NEYNAR_API_KEY", "")
 
 PROTOCOLS = [p.strip() for p in os.environ.get("PROTOCOLS", "Arc Network,Base").split(",") if p.strip()]
 
@@ -42,6 +43,10 @@ TOPIC_HISTORY_FILE = "topic_history.json"
 MAX_CLUSTERS_TO_EDITOR = 60
 CLUSTER_SIMILARITY_THRESHOLD = 0.42  # jaccard on significant words
 HISTORY_RETENTION_DAYS = 14
+COMMUNITY_MIN_SLOTS = 15  # guaranteed minimum Reddit+Farcaster clusters in editor batch
+
+# search queries used to pull relevant Farcaster casts -- generic terms plus your protocols
+FARCASTER_QUERIES = ["defi", "airdrop", "stablecoin", "onchain"] + [p.strip() for p in PROTOCOLS]
 
 RSS_FEEDS = {
     "CoinTelegraph": "https://cointelegraph.com/rss",
@@ -85,7 +90,47 @@ def item_id(title, link):
     return hashlib.sha256((title + link).encode()).hexdigest()[:16]
 
 
-def send_telegram(text):
+CF_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")
+CF_NAMESPACE_ID = os.environ.get("CF_NAMESPACE_ID", "")
+CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "")
+
+
+def push_draft_to_kv(draft_id, draft_dict):
+    if not (CF_ACCOUNT_ID and CF_NAMESPACE_ID and CF_API_TOKEN):
+        return False
+    try:
+        url = (
+            f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
+            f"/storage/kv/namespaces/{CF_NAMESPACE_ID}/values/{draft_id}"
+        )
+        r = requests.put(
+            url,
+            headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
+            data=json.dumps(draft_dict),
+            timeout=15,
+        )
+        return r.ok
+    except Exception as e:
+        print(f"Cloudflare KV push failed: {e}")
+        return False
+
+
+def build_inline_keyboard(draft_id):
+    return {
+        "inline_keyboard": [
+            [
+                {"text": "🔄 Rewrite", "callback_data": f"rewrite:{draft_id}"},
+                {"text": "😈 Contrarian", "callback_data": f"contrarian:{draft_id}"},
+            ],
+            [
+                {"text": "😂 Meme", "callback_data": f"meme:{draft_id}"},
+                {"text": "💾 Save", "callback_data": f"save:{draft_id}"},
+            ],
+        ]
+    }
+
+
+def send_telegram(text, reply_markup=None):
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -93,6 +138,8 @@ def send_telegram(text):
         "parse_mode": "HTML",
         "disable_web_page_preview": False,
     }
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
     r = requests.post(url, data=payload, timeout=15)
     if not r.ok:
         print("Telegram send failed:", r.text)
@@ -160,6 +207,49 @@ def fetch_coingecko_trending():
             })
     except Exception as e:
         print(f"CoinGecko fetch failed: {e}")
+    return items
+
+
+def fetch_farcaster(cutoff):
+    items = []
+    if not NEYNAR_API_KEY:
+        return items
+    seen_hashes = set()
+    for query in FARCASTER_QUERIES:
+        try:
+            r = requests.get(
+                "https://api.neynar.com/v2/farcaster/cast/search",
+                headers={"x-api-key": NEYNAR_API_KEY},
+                params={"q": query, "limit": 15},
+                timeout=15,
+            )
+            data = r.json()
+            casts = data.get("result", {}).get("casts", [])
+            for cast in casts:
+                cast_hash = cast.get("hash", "")
+                if not cast_hash or cast_hash in seen_hashes:
+                    continue
+                seen_hashes.add(cast_hash)
+                ts = cast.get("timestamp", "")
+                try:
+                    pub_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+                except Exception:
+                    continue
+                if pub_dt < cutoff:
+                    continue
+                text = cast.get("text", "").strip()
+                if not text:
+                    continue
+                author = cast.get("author", {}).get("username", "unknown")
+                items.append({
+                    "source": "Farcaster",
+                    "title": text[:200],
+                    "link": f"https://warpcast.com/{author}/{cast_hash[:10]}",
+                    "summary": f"by @{author}",
+                    "published": pub_dt,
+                })
+        except Exception as e:
+            print(f"Farcaster fetch failed for query '{query}': {e}")
     return items
 
 
@@ -263,6 +353,12 @@ PROTOCOLS THE USER ACTIVELY FOLLOWS: {protocols_str}
 FILTER AGGRESSIVELY. Most clusters should be REJECTED. Strongly prioritize EMERGING and RISING topics --
 the goal is to catch things BEFORE they're saturated, not to comment on something everyone already covered.
 Be skeptical of SATURATED topics unless you have a genuinely fresh angle nobody else has taken.
+
+Do NOT systematically prefer polished news-outlet articles over Reddit or Farcaster items just because
+they read more professionally. Raw community chatter, memes, and Farcaster casts are often the earliest
+and most interesting signal -- a rough Reddit thread catching a real shift in sentiment, or a Farcaster
+cast about protocol activity, can be a better opportunity than a rewritten press release. Judge every
+item on genuine merit for the user's content goals, not on how polished the source reads.
 
 Only pick clusters that are:
 - important, rapidly trending, surprising, or controversial
@@ -381,6 +477,10 @@ def main():
     print(f"CoinGecko: fetched {len(cg_items)} items")
     all_items.extend(cg_items)
 
+    fc_items = fetch_farcaster(cutoff)
+    print(f"Farcaster: fetched {len(fc_items)} items")
+    all_items.extend(fc_items)
+
     print(f"Total items fetched: {len(all_items)}")
 
     new_items = []
@@ -416,7 +516,22 @@ def main():
     # sort clusters: EMERGING/RISING/TRENDING first, then by size
     priority_order = {"EMERGING": 0, "RISING": 1, "TRENDING": 2, "NEW": 3, "STEADY": 4, "SATURATED": 5, "DECLINING": 6}
     clusters.sort(key=lambda c: (priority_order.get(c["trend_status"], 9), -len(c["members"])))
-    batch = clusters[:MAX_CLUSTERS_TO_EDITOR]
+
+    # guarantee community-sourced clusters (Reddit, Farcaster) get real representation --
+    # otherwise polished news articles with more duplicate coverage dominate pure trend-sort
+    def is_community(c):
+        return any(m["source"].startswith("Reddit") or m["source"] == "Farcaster" for m in c["members"])
+
+    community_clusters = [c for c in clusters if is_community(c)]
+    other_clusters = [c for c in clusters if not is_community(c)]
+
+    guaranteed_community = community_clusters[:COMMUNITY_MIN_SLOTS]
+    remaining_slots = MAX_CLUSTERS_TO_EDITOR - len(guaranteed_community)
+    remaining_pool = other_clusters + community_clusters[COMMUNITY_MIN_SLOTS:]
+    remaining_pool.sort(key=lambda c: (priority_order.get(c["trend_status"], 9), -len(c["members"])))
+
+    batch = guaranteed_community + remaining_pool[:remaining_slots]
+    batch.sort(key=lambda c: (priority_order.get(c["trend_status"], 9), -len(c["members"])))
 
     # ---- build editor prompt text ----
     lines = []
@@ -454,7 +569,26 @@ def main():
         cluster = batch[idx] if isinstance(idx, int) and 0 <= idx < len(batch) else None
         priority = opp.get("priority", "DAILY")
         if priority in ("BREAKING", "HIGH"):
-            send_telegram(format_opportunity(opp, cluster))
+            rep = cluster["representative"] if cluster else None
+            trend_status = cluster.get("trend_status", "") if cluster else ""
+            source_count = len(cluster["members"]) if cluster else 1
+            draft_id = hashlib.sha256(
+                (opp.get("headline", "") + str(now)).encode()
+            ).hexdigest()[:12]
+            draft_dict = {
+                "emoji": PRIORITY_EMOJI.get(priority, "🟠"),
+                "headline": opp.get("headline", "Untitled"),
+                "why_now": opp.get("why_now", ""),
+                "protocol_connection": opp.get("protocol_connection"),
+                "angle": opp.get("angle", ""),
+                "draft_post": opp.get("draft_post", ""),
+                "trend_line": f"{TREND_EMOJI.get(trend_status, '')} {trend_status} | {source_count} source(s)" if trend_status else "",
+                "source_name": rep["source"] if rep else "",
+                "source_link": rep["link"] if rep else "",
+            }
+            kv_ok = push_draft_to_kv(draft_id, draft_dict)
+            keyboard = build_inline_keyboard(draft_id) if kv_ok else None
+            send_telegram(format_opportunity(opp, cluster), reply_markup=keyboard)
             time.sleep(1)
         else:
             daily_batch.append((opp, cluster))
