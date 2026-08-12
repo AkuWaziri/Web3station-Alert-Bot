@@ -31,6 +31,8 @@ jobs:
           CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           PROTOCOLS: ${{ secrets.PROTOCOLS }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
         run: python main.py
 
       - name: Commit updated state files
