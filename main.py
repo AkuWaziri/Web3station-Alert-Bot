@@ -28,6 +28,20 @@ TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
 CRYPTOPANIC_KEY = os.environ.get("CRYPTOPANIC_KEY", "")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 NEYNAR_API_KEY = os.environ.get("NEYNAR_API_KEY", "")
+LUNARCRUSH_API_KEY = os.environ.get("LUNARCRUSH_API_KEY", "")
+CMC_API_KEY = os.environ.get("CMC_API_KEY", "")
+ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
+SOLSCAN_API_KEY = os.environ.get("SOLSCAN_API_KEY", "")
+
+# Comma-separated "chainid:contract_address" pairs, e.g. "8453:0xYourBaseToken,1:0xYourEthToken"
+# Base chainid is 8453 under Etherscan API V2's unified chain system. Leave empty to skip.
+TRACKED_EVM_CONTRACTS = [
+    pair.strip() for pair in os.environ.get("TRACKED_EVM_CONTRACTS", "").split(",") if pair.strip()
+]
+# Comma-separated Solana token mint addresses to watch via Solscan. Leave empty to skip.
+TRACKED_SOLANA_TOKENS = [
+    addr.strip() for addr in os.environ.get("TRACKED_SOLANA_TOKENS", "").split(",") if addr.strip()
+]
 
 PROTOCOLS = [p.strip() for p in os.environ.get("PROTOCOLS", "Arc Network,Base").split(",") if p.strip()]
 
@@ -48,6 +62,9 @@ COMMUNITY_MIN_SLOTS = 15  # guaranteed minimum Reddit+Farcaster clusters in edit
 # search queries used to pull relevant Farcaster casts -- generic terms plus your protocols
 FARCASTER_QUERIES = ["defi", "airdrop", "stablecoin", "onchain"] + [p.strip() for p in PROTOCOLS]
 
+# LunarCrush per-topic X/social signal -- protocols plus general narrative terms
+LUNARCRUSH_TOPICS = list(PROTOCOLS) + ["defi", "airdrop", "stablecoin", "onchain"]
+
 RSS_FEEDS = {
     "CoinTelegraph": "https://cointelegraph.com/rss",
     "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
@@ -58,6 +75,18 @@ RSS_FEEDS = {
     "Reddit-NFT": "https://www.reddit.com/r/NFT/new/.rss",
     "Reddit-CryptoMoonShots": "https://www.reddit.com/r/CryptoMoonShots/new/.rss",
     "Reddit-defi": "https://www.reddit.com/r/defi/new/.rss",
+    # Dedicated Arc Network news feed via Google News search RSS (free, no key required).
+    # Google News RSS re-crawls constantly, so this catches Arc coverage from outlets
+    # that don't have their own RSS feed we can point to directly.
+    "GoogleNews-ArcNetwork": (
+        "https://news.google.com/rss/search?q=%22Arc%20Network%22%20Circle%20blockchain"
+        "%20when:3d&hl=en-US&gl=US&ceid=US:en"
+    ),
+    # Same pattern for Base, since it's your other tracked protocol
+    "GoogleNews-Base": (
+        "https://news.google.com/rss/search?q=%22Base%22%20Coinbase%20blockchain%20L2"
+        "%20when:3d&hl=en-US&gl=US&ceid=US:en"
+    ),
 }
 
 STOPWORDS = {
@@ -250,6 +279,219 @@ def fetch_farcaster(cutoff):
                 })
         except Exception as e:
             print(f"Farcaster fetch failed for query '{query}': {e}")
+    return items
+
+
+def fetch_lunarcrush_topic_signal(topic):
+    """Pull per-topic social/X sentiment + volume snapshot from LunarCrush.
+    Silently returns nothing if the topic slug doesn't resolve or the key
+    is missing/rate-limited -- this is a supplementary signal, not a
+    required source, so failures here should never break the run."""
+    items = []
+    if not LUNARCRUSH_API_KEY:
+        return items
+    try:
+        slug = topic.lower().replace(" ", "-")
+        r = requests.get(
+            f"https://lunarcrush.com/api4/public/topic/{slug}/v1",
+            headers={"Authorization": f"Bearer {LUNARCRUSH_API_KEY}"},
+            timeout=15,
+        )
+        if r.status_code != 200:
+            return items
+        data = r.json().get("data", {})
+        if not data:
+            return items
+
+        tweet_sentiment = data.get("types_sentiment", {}).get("tweet")
+        tweet_count = data.get("types_count", {}).get("tweet", 0)
+        interactions = data.get("interactions_24h", 0)
+
+        # skip near-silent topics so quiet runs don't spam the editor with noise
+        if tweet_count < 5 and interactions < 500:
+            return items
+
+        sentiment_str = f", X sentiment {tweet_sentiment}%" if tweet_sentiment is not None else ""
+        items.append({
+            "source": "LunarCrush X Signal",
+            "title": f"X chatter on '{topic}': {tweet_count} posts/24h, "
+                     f"{interactions:,} interactions{sentiment_str}",
+            "link": f"https://lunarcrush.com/topic/{slug}",
+            "summary": f"Social volume snapshot for {topic} across X",
+            "published": datetime.now(timezone.utc),
+        })
+    except Exception as e:
+        print(f"LunarCrush topic fetch failed for '{topic}': {e}")
+    return items
+
+
+def fetch_lunarcrush_topics_signal():
+    items = []
+    for topic in LUNARCRUSH_TOPICS:
+        items.extend(fetch_lunarcrush_topic_signal(topic))
+        time.sleep(0.5)  # be polite to free-tier rate limits
+    return items
+
+
+def fetch_dexscreener_trending():
+    """Free, no key. Boosted/trending token pairs across every chain DexScreener
+    indexes -- the best free source for catching meme coin momentum early."""
+    items = []
+    try:
+        r = requests.get(
+            "https://api.dexscreener.com/token-boosts/top/v1",
+            headers=HEADERS, timeout=15,
+        )
+        data = r.json()
+        now = datetime.now(timezone.utc)
+        entries = data if isinstance(data, list) else data.get("tokens", [])
+        for t in entries[:10]:
+            chain = t.get("chainId", "unknown")
+            addr = t.get("tokenAddress", "")
+            desc = (t.get("description") or "").strip()[:150]
+            items.append({
+                "source": "DexScreener Trending",
+                "title": f"Boosted/trending token on {chain}: {addr[:10]}... "
+                         f"({t.get('amount', 0)} boost units)",
+                "link": t.get("url") or f"https://dexscreener.com/{chain}/{addr}",
+                "summary": desc,
+                "published": now,
+            })
+    except Exception as e:
+        print(f"DexScreener fetch failed: {e}")
+    return items
+
+
+def fetch_defillama_movers():
+    """Free, no key. Flags DeFi protocols with the biggest 24h TVL swings --
+    good early signal for both DeFi and RWA content areas."""
+    items = []
+    try:
+        r = requests.get("https://api.llama.fi/protocols", headers=HEADERS, timeout=20)
+        data = r.json()
+        now = datetime.now(timezone.utc)
+        movers = [p for p in data if p.get("change_1d") is not None and p.get("tvl", 0) > 1_000_000]
+        movers.sort(key=lambda p: abs(p["change_1d"]), reverse=True)
+        for p in movers[:8]:
+            direction = "up" if p["change_1d"] > 0 else "down"
+            items.append({
+                "source": "DeFiLlama Movers",
+                "title": f"{p.get('name')} TVL {direction} {abs(p['change_1d']):.1f}% in 24h "
+                         f"(${p.get('tvl', 0):,.0f} total)",
+                "link": f"https://defillama.com/protocol/{p.get('slug', '')}",
+                "summary": f"Category: {p.get('category', 'N/A')}",
+                "published": now,
+            })
+    except Exception as e:
+        print(f"DeFiLlama fetch failed: {e}")
+    return items
+
+
+def fetch_coinmarketcap_trending():
+    """Needs a free CMC_API_KEY from coinmarketcap.com/api."""
+    items = []
+    if not CMC_API_KEY:
+        return items
+    try:
+        r = requests.get(
+            "https://pro-api.coinmarketcap.com/v1/cryptocurrency/trending/latest",
+            headers={"X-CMC_PRO_API_KEY": CMC_API_KEY, **HEADERS},
+            timeout=15,
+        )
+        data = r.json()
+        now = datetime.now(timezone.utc)
+        for c in data.get("data", [])[:8]:
+            items.append({
+                "source": "CoinMarketCap Trending",
+                "title": f"Trending on CMC: {c.get('name')} ({c.get('symbol')}) "
+                         f"- rank #{c.get('cmc_rank', 'N/A')}",
+                "link": f"https://coinmarketcap.com/currencies/{c.get('slug', '')}/",
+                "summary": "", "published": now,
+            })
+    except Exception as e:
+        print(f"CoinMarketCap fetch failed: {e}")
+    return items
+
+
+def fetch_etherscan_activity(cutoff):
+    """Needs a free ETHERSCAN_API_KEY (etherscan.io/myapikey). Uses API V2's
+    unified chainid param, so this covers Base and any other EVM chain by
+    just changing the chainid in TRACKED_EVM_CONTRACTS. Silently returns
+    nothing until you add contract addresses to watch."""
+    items = []
+    if not ETHERSCAN_API_KEY or not TRACKED_EVM_CONTRACTS:
+        return items
+    for pair in TRACKED_EVM_CONTRACTS:
+        try:
+            chainid, address = pair.split(":", 1)
+        except ValueError:
+            print(f"Skipping malformed TRACKED_EVM_CONTRACTS entry: {pair}")
+            continue
+        try:
+            r = requests.get(
+                "https://api.etherscan.io/v2/api",
+                params={
+                    "chainid": chainid, "module": "account", "action": "tokentx",
+                    "contractaddress": address, "sort": "desc", "offset": 20,
+                    "apikey": ETHERSCAN_API_KEY,
+                },
+                timeout=15,
+            )
+            data = r.json()
+            for tx in data.get("result", [])[:20]:
+                try:
+                    pub_dt = datetime.fromtimestamp(int(tx["timeStamp"]), tz=timezone.utc)
+                except Exception:
+                    continue
+                if pub_dt < cutoff:
+                    continue
+                decimals = int(tx.get("tokenDecimal", 18) or 18)
+                value = int(tx.get("value", 0)) / (10 ** decimals)
+                if value < 1000:  # skip dust, keep this a "notable activity" feed
+                    continue
+                items.append({
+                    "source": "Etherscan Activity",
+                    "title": f"{value:,.0f} {tx.get('tokenSymbol', '')} transferred on chain {chainid}",
+                    "link": f"https://etherscan.io/tx/{tx.get('hash', '')}",
+                    "summary": f"From {tx.get('from', '')[:10]}... to {tx.get('to', '')[:10]}...",
+                    "published": pub_dt,
+                })
+        except Exception as e:
+            print(f"Etherscan fetch failed for {pair}: {e}")
+    return items
+
+
+def fetch_solscan_activity(cutoff):
+    """Needs a free-tier SOLSCAN_API_KEY from solscan.io. Silently returns
+    nothing until you add token mints to TRACKED_SOLANA_TOKENS."""
+    items = []
+    if not SOLSCAN_API_KEY or not TRACKED_SOLANA_TOKENS:
+        return items
+    for mint in TRACKED_SOLANA_TOKENS:
+        try:
+            r = requests.get(
+                "https://pro-api.solscan.io/v2.0/token/defi/activities",
+                headers={"token": SOLSCAN_API_KEY},
+                params={"address": mint, "page_size": 20},
+                timeout=15,
+            )
+            data = r.json()
+            for act in data.get("data", [])[:20]:
+                try:
+                    pub_dt = datetime.fromtimestamp(int(act["block_time"]), tz=timezone.utc)
+                except Exception:
+                    continue
+                if pub_dt < cutoff:
+                    continue
+                items.append({
+                    "source": "Solscan Activity",
+                    "title": f"Solana DeFi activity on tracked token: {act.get('activity_type', 'unknown')}",
+                    "link": f"https://solscan.io/tx/{act.get('trans_id', '')}",
+                    "summary": f"Value: {act.get('value', 'N/A')}",
+                    "published": pub_dt,
+                })
+        except Exception as e:
+            print(f"Solscan fetch failed for {mint}: {e}")
     return items
 
 
@@ -480,6 +722,30 @@ def main():
     fc_items = fetch_farcaster(cutoff)
     print(f"Farcaster: fetched {len(fc_items)} items")
     all_items.extend(fc_items)
+
+    lc_items = fetch_lunarcrush_topics_signal()
+    print(f"LunarCrush topic signal: fetched {len(lc_items)} items")
+    all_items.extend(lc_items)
+
+    dex_items = fetch_dexscreener_trending()
+    print(f"DexScreener: fetched {len(dex_items)} items")
+    all_items.extend(dex_items)
+
+    dl_items = fetch_defillama_movers()
+    print(f"DeFiLlama: fetched {len(dl_items)} items")
+    all_items.extend(dl_items)
+
+    cmc_items = fetch_coinmarketcap_trending()
+    print(f"CoinMarketCap: fetched {len(cmc_items)} items")
+    all_items.extend(cmc_items)
+
+    es_items = fetch_etherscan_activity(cutoff)
+    print(f"Etherscan: fetched {len(es_items)} items")
+    all_items.extend(es_items)
+
+    sol_items = fetch_solscan_activity(cutoff)
+    print(f"Solscan: fetched {len(sol_items)} items")
+    all_items.extend(sol_items)
 
     print(f"Total items fetched: {len(all_items)}")
 
