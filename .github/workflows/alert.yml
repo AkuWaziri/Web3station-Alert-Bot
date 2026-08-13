@@ -1,7 +1,7 @@
 name: Crypto Alert Bot
 on:
   schedule:
-    # runs every 1 hours
+    # runs every 30 minutes
     - cron: "0 */2 * * *"
   workflow_dispatch: {}  # lets you manually trigger a run from the Actions tab
 permissions:
