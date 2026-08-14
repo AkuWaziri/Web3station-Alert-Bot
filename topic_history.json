@@ -31,5 +31,26 @@
     "decision": "POST",
     "narrative_status": "emerging",
     "writing_mode": "analytical"
+  },
+  {
+    "timestamp": "2026-08-14T18:17:55.881434+00:00",
+    "narratives": [
+      "stablecoin",
+      "payments",
+      "ai agent",
+      "ethereum",
+      "bitcoin",
+      "usdt",
+      "institutional",
+      "ai agents",
+      "stablecoins",
+      "nft"
+    ],
+    "confidence": 0.85,
+    "evidence_score": 0.78,
+    "kol_opportunity_score": 0.74,
+    "decision": "POST",
+    "narrative_status": "emerging",
+    "writing_mode": "analytical"
   }
 ]
