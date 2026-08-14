@@ -10,5 +10,26 @@
     ],
     "confidence": 92,
     "writing_mode": "ANALYTICAL"
+  },
+  {
+    "timestamp": "2026-08-14T17:57:53.820953+00:00",
+    "narratives": [
+      "ai agents",
+      "ai agent",
+      "rwa",
+      "stablecoin",
+      "stablecoins",
+      "usdt",
+      "base",
+      "defi",
+      "bitcoin",
+      "payments"
+    ],
+    "confidence": 0.68,
+    "evidence_score": 0.62,
+    "kol_opportunity_score": 0.71,
+    "decision": "POST",
+    "narrative_status": "emerging",
+    "writing_mode": "analytical"
   }
 ]
