@@ -3,31 +3,122 @@ import json
 import hashlib
 from datetime import datetime, timezone
 from html import unescape
+from urllib.parse import quote
 
 import requests
 import feedparser
 
 
 # ============================================================
+# WEB3STATION INTELLIGENCE ENGINE
+# ============================================================
+#
+# PURPOSE
+# -------
+# This bot is NOT a crypto news spammer.
+#
+# It is an editorial intelligence system designed to help
+# the creator become known for:
+#
+# AI x Crypto
+# Stablecoins
+# Payments
+# Financial Infrastructure
+# RWA / Tokenization
+# Wallets
+# Onchain Finance
+# DeFi
+# Bitcoin / Ethereum / Solana when relevant
+# NFT / Crypto Culture when there is a real angle
+#
+# PIPELINE
+# --------
+#
+# SOURCES
+#   ↓
+# SIGNAL COLLECTION
+#   ↓
+# DEDUPLICATION
+#   ↓
+# TOPIC MATCHING
+#   ↓
+# SIGNAL SCORING
+#   ↓
+# NARRATIVE CLUSTERING
+#   ↓
+# SOURCE DIVERSITY
+#   ↓
+# GROQ EDITORIAL ANALYSIS
+#   ↓
+# FACT / INFERENCE / FORECAST SEPARATION
+#   ↓
+# KOL OPPORTUNITY SCORE
+#   ↓
+# ADAPTIVE WRITING MODE
+#   ↓
+# TELEGRAM
+#
+# ============================================================
+
+
+# ============================================================
 # CONFIG
 # ============================================================
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.getenv(
+    "TELEGRAM_TOKEN",
+    ""
+).strip()
 
-CMC_API_KEY = os.getenv("CMC_API_KEY", "")
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY", "")
-NEYNAR_API_KEY = os.getenv("NEYNAR_API_KEY", "")
-SORSA_API_KEY = os.getenv("SORSA_API_KEY", "")
-GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv(
+    "TELEGRAM_CHAT_ID",
+    ""
+).strip()
+
+CMC_API_KEY = os.getenv(
+    "CMC_API_KEY",
+    ""
+).strip()
+
+COINGECKO_API_KEY = os.getenv(
+    "COINGECKO_API_KEY",
+    ""
+).strip()
+
+GROQ_API_KEY = os.getenv(
+    "GROQ_API_KEY",
+    ""
+).strip()
+
+LUNARCRUSH_API_KEY = os.getenv(
+    "LUNARCRUSH_API_KEY",
+    ""
+).strip()
+
+NEYNAR_API_KEY = os.getenv(
+    "NEYNAR_API_KEY",
+    ""
+).strip()
+
+SORSA_API_KEY = os.getenv(
+    "SORSA_API_KEY",
+    ""
+).strip()
+
+GITHUB_TOKEN = os.getenv(
+    "GITHUB_TOKEN",
+    ""
+).strip()
 
 GROQ_MODEL = os.getenv(
     "GROQ_MODEL",
     "openai/gpt-oss-120b"
-)
+).strip()
 
+
+# ============================================================
+# SAFE ENV PARSERS
+# ============================================================
 
 def get_float_env(name, default):
     value = os.getenv(name)
@@ -37,7 +128,7 @@ def get_float_env(name, default):
 
     try:
         return float(value)
-    except ValueError:
+    except (ValueError, TypeError):
         return default
 
 
@@ -49,19 +140,20 @@ def get_int_env(name, default):
 
     try:
         return int(value)
-    except ValueError:
+    except (ValueError, TypeError):
         return default
 
 
 MIN_SIGNAL_SCORE = get_float_env(
     "MIN_SIGNAL_SCORE",
-    6
+    6.0
 )
 
 MAX_ALERTS = get_int_env(
     "MAX_ALERTS",
     5
 )
+
 
 WATCHLIST = [
     x.strip().upper()
@@ -72,35 +164,62 @@ WATCHLIST = [
     if x.strip()
 ]
 
+
 SEEN_FILE = "seen_ids.json"
 TOPIC_FILE = "topic_history.json"
 
 
 # ============================================================
-# BRAND / NICHE PRIORITY
+# EDITORIAL THRESHOLDS
+# ============================================================
+
+# KOL opportunity is scored 0-10.
+
+POST_THRESHOLD = 7.0
+WATCH_THRESHOLD = 5.0
+
+# Breaking/security/regulatory events can deserve attention
+# even when the normal narrative score is lower.
+URGENT_THRESHOLD = 5.5
+
+
+# ============================================================
+# BRAND / NICHE
 # ============================================================
 
 TIER_1_TOPICS = [
     "stablecoin",
     "stablecoins",
-    "payments",
+    "stablecoin payments",
     "crypto payments",
+    "payments",
+    "payment infrastructure",
     "ai agents",
     "ai agent",
     "agentic commerce",
+    "agentic economy",
     "agentic",
     "financial infrastructure",
     "onchain finance",
+    "on-chain finance",
     "rwa",
     "real world assets",
+    "real-world assets",
     "tokenization",
+    "tokenisation",
     "wallet",
     "wallets",
+    "smart wallet",
+    "smart wallets",
     "usdc",
     "usdt",
     "remittance",
     "cross-border payments",
+    "cross border payments",
+    "settlement",
+    "merchant payments",
 ]
+
 
 TIER_2_TOPICS = [
     "defi",
@@ -109,15 +228,22 @@ TIER_2_TOPICS = [
     "solana",
     "base",
     "arbitrum",
+    "optimism",
     "layer 2",
     "l2",
     "account abstraction",
-    "smart wallet",
-    "security",
     "institutional",
     "regulation",
+    "regulatory",
     "mainnet",
+    "testnet",
+    "security",
+    "protocol",
+    "infrastructure",
+    "liquidity",
+    "yield",
 ]
+
 
 TIER_3_TOPICS = [
     "nft",
@@ -126,13 +252,82 @@ TIER_3_TOPICS = [
     "memecoin",
     "memecoins",
     "crypto culture",
+    "meme",
+    "creator economy",
 ]
+
 
 ALL_TOPICS = (
     TIER_1_TOPICS
     + TIER_2_TOPICS
     + TIER_3_TOPICS
 )
+
+
+# ============================================================
+# HIGH-VALUE EVENT TERMS
+# ============================================================
+
+BREAKING_TERMS = [
+    "hack",
+    "hacked",
+    "exploit",
+    "exploited",
+    "attack",
+    "attacked",
+    "breach",
+    "stolen",
+    "drained",
+    "drain",
+    "halt",
+    "halted",
+    "outage",
+    "shutdown",
+    "insolvent",
+    "bankrupt",
+    "lawsuit",
+    "indictment",
+    "ban",
+    "banned",
+    "approval",
+    "approved",
+    "rejected",
+    "etf",
+    "regulator",
+    "sec",
+    "cftc",
+]
+
+
+HIGH_VALUE_TERMS = [
+    "launch",
+    "launched",
+    "mainnet",
+    "integration",
+    "integrated",
+    "partnership",
+    "funding",
+    "funded",
+    "adoption",
+    "payment",
+    "payments",
+    "stablecoin",
+    "institutional",
+    "tokenization",
+    "tokenisation",
+    "acquisition",
+    "upgrade",
+    "release",
+    "released",
+    "volume",
+    "settlement",
+    "merchant",
+    "remittance",
+    "cross-border",
+    "cross border",
+    "treasury",
+    "rwa",
+]
 
 
 # ============================================================
@@ -152,18 +347,71 @@ RSS_FEEDS = [
 
 
 # ============================================================
-# SESSION
+# REDDIT
+# ============================================================
+
+REDDIT_SUBREDDITS = [
+    "CryptoCurrency",
+    "ethereum",
+    "defi",
+    "solana",
+    "Bitcoin",
+    "artificial",
+]
+
+
+# ============================================================
+# GITHUB SEARCHES
+# ============================================================
+
+GITHUB_SEARCHES = [
+    "stablecoin",
+    "crypto payments",
+    "AI agents crypto",
+    "DeFi",
+    "RWA tokenization",
+]
+
+
+# ============================================================
+# SOCIAL SEARCHES
+# ============================================================
+
+NEYNAR_QUERIES = [
+    "stablecoin",
+    "crypto payments",
+    "AI agents",
+    "DeFi",
+    "RWA",
+]
+
+
+SORSA_QUERIES = [
+    "stablecoin payments",
+    "AI agents crypto",
+    "crypto payments",
+    "RWA tokenization",
+    "DeFi",
+]
+
+
+# ============================================================
+# HTTP SESSION
 # ============================================================
 
 SESSION = requests.Session()
 
 SESSION.headers.update({
-    "User-Agent": "Web3Station/3.0"
+    "User-Agent": (
+        "Mozilla/5.0 "
+        "(compatible; Web3Station/3.0; "
+        "+https://github.com/)"
+    )
 })
 
 
 # ============================================================
-# HELPERS
+# BASIC HELPERS
 # ============================================================
 
 def now():
@@ -178,7 +426,7 @@ def safe_get(url, **kwargs):
 
         response = SESSION.get(
             url,
-            timeout=20,
+            timeout=25,
             **kwargs
         )
 
@@ -186,17 +434,19 @@ def safe_get(url, **kwargs):
             return response
 
         print(
-            f"[HTTP {response.status_code}] {url}"
+            f"[HTTP {response.status_code}] "
+            f"{url}"
         )
 
         print(
-            response.text[:1000]
+            response.text[:300]
         )
 
     except Exception as exc:
 
         print(
-            f"[REQUEST ERROR] {url}: {exc}"
+            f"[REQUEST ERROR] "
+            f"{url}: {exc}"
         )
 
     return None
@@ -208,11 +458,11 @@ def safe_post(url, **kwargs):
 
         response = SESSION.post(
             url,
-            timeout=30,
+            timeout=45,
             **kwargs
         )
 
-        if response.status_code == 200:
+        if 200 <= response.status_code < 300:
             return response
 
         print(
@@ -221,13 +471,14 @@ def safe_post(url, **kwargs):
         )
 
         print(
-            response.text[:1000]
+            response.text[:500]
         )
 
     except Exception as exc:
 
         print(
-            f"[POST ERROR] {url}: {exc}"
+            f"[POST ERROR] "
+            f"{url}: {exc}"
         )
 
     return None
@@ -245,6 +496,7 @@ def clean_text(text):
     return " ".join(
         text
         .replace("\n", " ")
+        .replace("\r", " ")
         .split()
     )
 
@@ -295,15 +547,88 @@ def save_json(path, data):
         )
 
 
+def safe_number(value, default=0):
+
+    try:
+
+        if value is None:
+            return default
+
+        return float(value)
+
+    except (
+        ValueError,
+        TypeError
+    ):
+
+        return default
+
+
 def matched_topics(text):
 
-    text = text.lower()
+    text = clean_text(
+        text
+    ).lower()
 
-    return [
-        topic
-        for topic in ALL_TOPICS
-        if topic.lower() in text
-    ]
+    found = []
+
+    for topic in ALL_TOPICS:
+
+        if topic.lower() in text:
+            found.append(topic)
+
+    # Preserve order while removing duplicates.
+    return list(
+        dict.fromkeys(found)
+    )
+
+
+def contains_any(text, words):
+
+    text = clean_text(
+        text
+    ).lower()
+
+    return any(
+        word.lower() in text
+        for word in words
+    )
+
+
+def source_domain(source):
+
+    source = (
+        source or ""
+    ).lower()
+
+    if "reddit" in source:
+        return "reddit"
+
+    if "farcaster" in source:
+        return "farcaster"
+
+    if "github" in source:
+        return "github"
+
+    if "coindesk" in source:
+        return "coindesk"
+
+    if "cointelegraph" in source:
+        return "cointelegraph"
+
+    if "coinmarketcap" in source:
+        return "coinmarketcap"
+
+    if "coingecko" in source:
+        return "coingecko"
+
+    if "lunarcrush" in source:
+        return "lunarcrush"
+
+    if "sorsa" in source:
+        return "sorsa"
+
+    return source
 
 
 # ============================================================
@@ -336,10 +661,17 @@ def telegram(message):
     response = safe_post(
         url,
         json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "parse_mode": "HTML",
-            "disable_web_page_preview": False
+            "chat_id":
+                TELEGRAM_CHAT_ID,
+
+            "text":
+                message,
+
+            "parse_mode":
+                "HTML",
+
+            "disable_web_page_preview":
+                False
         }
     )
 
@@ -372,9 +704,14 @@ def fetch_coinmarketcap():
                 CMC_API_KEY
         },
         params={
-            "start": 1,
-            "limit": 100,
-            "convert": "USD"
+            "start":
+                1,
+
+            "limit":
+                100,
+
+            "convert":
+                "USD"
         }
     )
 
@@ -402,7 +739,7 @@ def fetch_coinmarketcap():
 
             if (
                 symbol not in WATCHLIST
-                and len(results) >= 25
+                and len(results) >= 30
             ):
                 continue
 
@@ -412,34 +749,79 @@ def fetch_coinmarketcap():
                 .get("USD", {})
             )
 
+            price = safe_number(
+                quote.get("price")
+            )
+
+            change = safe_number(
+                quote.get(
+                    "percent_change_24h"
+                )
+            )
+
+            volume = safe_number(
+                quote.get(
+                    "volume_24h"
+                )
+            )
+
+            market_cap = safe_number(
+                quote.get(
+                    "market_cap"
+                )
+            )
+
+            slug = coin.get(
+                "slug",
+                ""
+            )
+
             results.append({
-                "source": "CoinMarketCap",
-                "type": "market",
-                "id": f"cmc:{symbol}",
+
+                "source":
+                    "CoinMarketCap",
+
+                "type":
+                    "market",
+
+                "id":
+                    f"cmc:{symbol}",
+
                 "title":
                     f"{symbol} market update",
-                "text": (
-                    f"{symbol} price "
-                    f"${quote.get('price', 0):,.4f}; "
-                    f"24h change "
-                    f"{quote.get('percent_change_24h', 0):.2f}%; "
-                    f"24h volume "
-                    f"${quote.get('volume_24h', 0):,.0f}; "
-                    f"market cap "
-                    f"${quote.get('market_cap', 0):,.0f}"
-                ),
+
+                "text":
+                    (
+                        f"{symbol} price "
+                        f"${price:,.6f}; "
+                        f"24h change "
+                        f"{change:.2f}%; "
+                        f"24h volume "
+                        f"${volume:,.0f}; "
+                        f"market cap "
+                        f"${market_cap:,.0f}"
+                    ),
+
                 "url":
-                    f"https://coinmarketcap.com/"
-                    f"currencies/"
-                    f"{coin.get('slug', '')}/",
+                    (
+                        "https://coinmarketcap.com/"
+                        f"currencies/{slug}/"
+                    ),
+
                 "symbol":
                     symbol,
+
                 "price":
-                    quote.get("price"),
+                    price,
+
                 "change_24h":
-                    quote.get(
-                        "percent_change_24h"
-                    )
+                    change,
+
+                "volume_24h":
+                    volume,
+
+                "market_cap":
+                    market_cap
             })
 
         return results
@@ -465,11 +847,20 @@ def fetch_coingecko():
     )
 
     ids = {
-        "BTC": "bitcoin",
-        "ETH": "ethereum",
-        "SOL": "solana",
-        "USDC": "usd-coin",
-        "USDT": "tether"
+        "BTC":
+            "bitcoin",
+
+        "ETH":
+            "ethereum",
+
+        "SOL":
+            "solana",
+
+        "USDC":
+            "usd-coin",
+
+        "USDT":
+            "tether"
     }
 
     selected = [
@@ -495,10 +886,13 @@ def fetch_coingecko():
         params={
             "ids":
                 ",".join(selected),
+
             "vs_currencies":
                 "usd",
+
             "include_24hr_change":
                 "true",
+
             "include_24hr_vol":
                 "true"
         }
@@ -524,30 +918,47 @@ def fetch_coingecko():
             )
 
             results.append({
+
                 "source":
                     "CoinGecko",
+
                 "type":
                     "market_validation",
+
                 "id":
                     f"coingecko:{symbol}",
+
                 "title":
                     f"{symbol} market validation",
-                "text": (
-                    f"{symbol} is trading around "
-                    f"${coin.get('usd', 0):,.4f}; "
-                    f"24h change "
-                    f"{coin.get('usd_24h_change', 0):.2f}%"
-                ),
+
+                "text":
+                    (
+                        f"{symbol} is trading around "
+                        f"${safe_number(coin.get('usd')):,.6f}; "
+                        f"24h change "
+                        f"{safe_number(coin.get('usd_24h_change')):.2f}%"
+                    ),
+
                 "url":
-                    f"https://www.coingecko.com/"
-                    f"en/coins/{coin_id}",
+                    (
+                        "https://www.coingecko.com/"
+                        f"en/coins/{coin_id}"
+                    ),
+
                 "symbol":
                     symbol,
+
                 "price":
                     coin.get("usd"),
+
                 "change_24h":
                     coin.get(
                         "usd_24h_change"
+                    ),
+
+                "volume_24h":
+                    coin.get(
+                        "usd_24h_vol"
                     )
             })
 
@@ -578,7 +989,7 @@ def fetch_rss():
                 url
             )
 
-            for entry in feed.entries[:20]:
+            for entry in feed.entries[:25]:
 
                 title = clean_text(
                     entry.get(
@@ -605,24 +1016,44 @@ def fetch_rss():
                 if not title or not link:
                     continue
 
+                published = clean_text(
+                    entry.get(
+                        "published",
+                        entry.get(
+                            "updated",
+                            ""
+                        )
+                    )
+                )
+
                 results.append({
+
                     "source":
                         source,
+
                     "type":
                         "news",
+
                     "id":
                         make_id(
                             source,
                             link
                         ),
+
                     "title":
                         title,
+
                     "text":
-                        f"{title} {summary}"[
-                            :3000
-                        ],
+                        (
+                            f"{title} "
+                            f"{summary}"
+                        )[:4000],
+
                     "url":
-                        link
+                        link,
+
+                    "published":
+                        published
                 })
 
         except Exception as exc:
@@ -639,16 +1070,6 @@ def fetch_rss():
 # REDDIT
 # ============================================================
 
-REDDIT_SUBREDDITS = [
-    "CryptoCurrency",
-    "ethereum",
-    "defi",
-    "solana",
-    "Bitcoin",
-    "artificial",
-]
-
-
 def fetch_reddit():
 
     results = []
@@ -656,15 +1077,18 @@ def fetch_reddit():
     for subreddit in REDDIT_SUBREDDITS:
 
         url = (
-            f"https://www.reddit.com/"
+            "https://www.reddit.com/"
             f"r/{subreddit}/new.json"
         )
 
         response = safe_get(
             url,
             params={
-                "limit": 15,
-                "raw_json": 1
+                "limit":
+                    20,
+
+                "raw_json":
+                    1
             }
         )
 
@@ -711,34 +1135,49 @@ def fetch_reddit():
                     continue
 
                 results.append({
+
                     "source":
                         f"Reddit/r/{subreddit}",
+
                     "type":
                         "community",
+
                     "id":
                         make_id(
                             "reddit",
                             subreddit,
                             data.get("id")
                         ),
+
                     "title":
                         title,
+
                     "text":
-                        f"{title} {body}"[
-                            :3000
-                        ],
+                        (
+                            f"{title} "
+                            f"{body}"
+                        )[:4000],
+
                     "url":
-                        f"https://www.reddit.com"
-                        f"{permalink}",
-                    "score":
-                        data.get(
-                            "score",
-                            0
+                        (
+                            "https://www.reddit.com"
+                            f"{permalink}"
                         ),
+
+                    "score":
+                        safe_number(
+                            data.get(
+                                "score",
+                                0
+                            )
+                        ),
+
                     "comments":
-                        data.get(
-                            "num_comments",
-                            0
+                        safe_number(
+                            data.get(
+                                "num_comments",
+                                0
+                            )
                         )
                 })
 
@@ -761,7 +1200,8 @@ def fetch_lunarcrush():
     if not LUNARCRUSH_API_KEY:
 
         print(
-            "[LUNARCRUSH] API key missing"
+            "[LUNARCRUSH] "
+            "API key missing"
         )
 
         return []
@@ -778,7 +1218,8 @@ def fetch_lunarcrush():
                 f"Bearer {LUNARCRUSH_API_KEY}"
         },
         params={
-            "limit": 25
+            "limit":
+                50
         }
     )
 
@@ -808,21 +1249,28 @@ def fetch_lunarcrush():
                 continue
 
             results.append({
+
                 "source":
                     "LunarCrush",
+
                 "type":
                     "social",
+
                 "id":
                     f"lunarcrush:{symbol}",
+
                 "title":
                     f"{symbol} social activity",
+
                 "text":
                     json.dumps(
                         coin,
                         ensure_ascii=False
                     )[:4000],
+
                 "url":
                     "https://lunarcrush.com/",
+
                 "symbol":
                     symbol
             })
@@ -853,17 +1301,9 @@ def fetch_neynar():
 
         return []
 
-    queries = [
-        "stablecoin",
-        "crypto payments",
-        "AI agents",
-        "DeFi",
-        "RWA"
-    ]
-
     results = []
 
-    for query in queries:
+    for query in NEYNAR_QUERIES:
 
         url = (
             "https://api.neynar.com/v2/"
@@ -877,8 +1317,11 @@ def fetch_neynar():
                     NEYNAR_API_KEY
             },
             params={
-                "q": query,
-                "limit": 10
+                "q":
+                    query,
+
+                "limit":
+                    10
             }
         )
 
@@ -913,19 +1356,26 @@ def fetch_neynar():
                     continue
 
                 results.append({
+
                     "source":
                         "Farcaster",
+
                     "type":
                         "social",
+
                     "id":
                         make_id(
                             "farcaster",
-                            cast_hash
+                            cast_hash,
+                            text
                         ),
+
                     "title":
-                        f"Farcaster: {query}",
+                        f"Farcaster discussion: {query}",
+
                     "text":
-                        text[:3000],
+                        text[:4000],
+
                     "url":
                         "https://warpcast.com/"
                 })
@@ -954,17 +1404,9 @@ def fetch_sorsa():
 
         return []
 
-    queries = [
-        "stablecoin payments",
-        "AI agents crypto",
-        "crypto payments",
-        "RWA tokenization",
-        "DeFi"
-    ]
-
     results = []
 
-    for query in queries:
+    for query in SORSA_QUERIES:
 
         url = (
             "https://api.sorsa.io/v3/"
@@ -978,8 +1420,11 @@ def fetch_sorsa():
                     SORSA_API_KEY
             },
             params={
-                "query": query,
-                "limit": 10
+                "query":
+                    query,
+
+                "limit":
+                    10
             }
         )
 
@@ -1026,20 +1471,26 @@ def fetch_sorsa():
                     continue
 
                 results.append({
+
                     "source":
                         "Sorsa / X",
+
                     "type":
                         "social",
+
                     "id":
                         make_id(
                             "sorsa",
                             tweet_id,
                             text
                         ),
+
                     "title":
                         f"X discussion: {query}",
+
                     "text":
-                        text[:3000],
+                        text[:4000],
+
                     "url":
                         "https://x.com/"
                 })
@@ -1057,15 +1508,6 @@ def fetch_sorsa():
 # ============================================================
 # GITHUB
 # ============================================================
-
-GITHUB_SEARCHES = [
-    "stablecoin",
-    "crypto payments",
-    "AI agents crypto",
-    "DeFi",
-    "RWA tokenization",
-]
-
 
 def fetch_github():
 
@@ -1093,10 +1535,17 @@ def fetch_github():
             url,
             headers=headers,
             params={
-                "q": query,
-                "sort": "updated",
-                "order": "desc",
-                "per_page": 5
+                "q":
+                    query,
+
+                "sort":
+                    "updated",
+
+                "order":
+                    "desc",
+
+                "per_page":
+                    5
             }
         )
 
@@ -1130,19 +1579,23 @@ def fetch_github():
                 )
 
                 results.append({
+
                     "source":
                         "GitHub",
+
                     "type":
                         "builder",
+
                     "id":
                         make_id(
                             "github",
                             repo.get("id"),
                             updated
                         ),
+
                     "title":
-                        f"GitHub activity: "
-                        f"{name}",
+                        f"GitHub activity: {name}",
+
                     "text":
                         (
                             f"{description} "
@@ -1152,11 +1605,24 @@ def fetch_github():
                             f"Forks: "
                             f"{repo.get('forks_count', 0)}. "
                             f"Updated: {updated}."
-                        ),
+                        )[:4000],
+
                     "url":
                         repo.get(
                             "html_url",
                             ""
+                        ),
+
+                    "stars":
+                        repo.get(
+                            "stargazers_count",
+                            0
+                        ),
+
+                    "forks":
+                        repo.get(
+                            "forks_count",
+                            0
                         )
                 })
 
@@ -1171,7 +1637,7 @@ def fetch_github():
 
 
 # ============================================================
-# LOCAL SIGNAL SCORING
+# SIGNAL SCORING
 # ============================================================
 
 def score_signal(item):
@@ -1183,7 +1649,13 @@ def score_signal(item):
 
     score = 0
 
-    topics = matched_topics(text)
+    topics = matched_topics(
+        text
+    )
+
+    # --------------------------------------------------------
+    # NICHE RELEVANCE
+    # --------------------------------------------------------
 
     for topic in topics:
 
@@ -1196,47 +1668,27 @@ def score_signal(item):
         elif topic in TIER_3_TOPICS:
             score += 0.75
 
-    high_value = [
-        "launch",
-        "mainnet",
-        "integration",
-        "partnership",
-        "funding",
-        "adoption",
-        "payment",
-        "payments",
-        "stablecoin",
-        "institutional",
-        "tokenization",
-        "acquisition",
-        "upgrade",
-        "release",
-        "volume",
-        "settlement"
-    ]
+    # --------------------------------------------------------
+    # HIGH VALUE EVENTS
+    # --------------------------------------------------------
 
-    for word in high_value:
+    for word in HIGH_VALUE_TERMS:
 
         if word in text:
-            score += 1
+            score += 1.0
 
-    urgent = [
-        "hack",
-        "exploit",
-        "attack",
-        "breach",
-        "halt",
-        "shutdown",
-        "lawsuit",
-        "ban",
-        "approval",
-        "outage"
-    ]
+    # --------------------------------------------------------
+    # BREAKING EVENTS
+    # --------------------------------------------------------
 
-    for word in urgent:
+    for word in BREAKING_TERMS:
 
         if word in text:
-            score += 2.5
+            score += 2.0
+
+    # --------------------------------------------------------
+    # MARKET MOVEMENT
+    # --------------------------------------------------------
 
     change = item.get(
         "change_24h"
@@ -1247,11 +1699,18 @@ def score_signal(item):
         (int, float)
     ):
 
-        if abs(change) >= 10:
+        if abs(change) >= 15:
+            score += 5
+
+        elif abs(change) >= 10:
             score += 4
 
         elif abs(change) >= 5:
             score += 2
+
+    # --------------------------------------------------------
+    # COMMUNITY ENGAGEMENT
+    # --------------------------------------------------------
 
     comments = item.get(
         "comments",
@@ -1263,14 +1722,40 @@ def score_signal(item):
         (int, float)
     ):
 
-        if comments >= 100:
+        if comments >= 500:
+            score += 3
+
+        elif comments >= 100:
             score += 2
 
         elif comments >= 30:
             score += 1
 
+    # --------------------------------------------------------
+    # GITHUB TRACTION
+    # --------------------------------------------------------
+
+    stars = item.get(
+        "stars",
+        0
+    )
+
+    if isinstance(
+        stars,
+        (int, float)
+    ):
+
+        if stars >= 500:
+            score += 3
+
+        elif stars >= 100:
+            score += 2
+
+        elif stars >= 25:
+            score += 1
+
     return round(
-        min(score, 20),
+        min(score, 25),
         2
     )
 
@@ -1297,18 +1782,38 @@ def build_narrative_clusters(items):
             if key not in clusters:
 
                 clusters[key] = {
-                    "topic": topic,
-                    "items": [],
-                    "sources": set(),
-                    "score": 0
+
+                    "topic":
+                        topic,
+
+                    "items":
+                        [],
+
+                    "sources":
+                        set(),
+
+                    "domains":
+                        set(),
+
+                    "score":
+                        0
                 }
 
             clusters[key]["items"].append(
                 item
             )
 
+            source = item.get(
+                "source",
+                ""
+            )
+
             clusters[key]["sources"].add(
-                item.get("source")
+                source
+            )
+
+            clusters[key]["domains"].add(
+                source_domain(source)
             )
 
             clusters[key]["score"] += (
@@ -1320,23 +1825,27 @@ def build_narrative_clusters(items):
 
     output = []
 
-    for topic, cluster in clusters.items():
-
-        source_count = len(
-            cluster["sources"]
-        )
+    for cluster in clusters.values():
 
         item_count = len(
             cluster["items"]
         )
 
+        source_count = len(
+            cluster["sources"]
+        )
+
+        domain_count = len(
+            cluster["domains"]
+        )
+
         confirmation = min(
-            source_count * 2,
-            8
+            domain_count * 2.5,
+            10
         )
 
         volume = min(
-            item_count,
+            item_count * 0.75,
             6
         )
 
@@ -1345,32 +1854,161 @@ def build_narrative_clusters(items):
                 cluster["score"]
                 + confirmation
                 + volume,
-                30
+                35
             ),
             2
         )
 
         output.append({
+
             "topic":
                 cluster["topic"],
+
             "item_count":
                 item_count,
+
             "source_count":
                 source_count,
+
+            "domain_count":
+                domain_count,
+
             "sources":
-                list(
+                sorted(
                     cluster["sources"]
                 ),
+
             "score":
                 narrative_score
         })
 
     output.sort(
-        key=lambda x: x["score"],
+        key=lambda x:
+            x["score"],
         reverse=True
     )
 
     return output
+
+
+# ============================================================
+# EDITORIAL MODE PRE-SELECTION
+# ============================================================
+
+def choose_editorial_mode(
+    items,
+    narratives
+):
+
+    combined = " ".join(
+        (
+            item.get(
+                "title",
+                ""
+            )
+            + " "
+            + item.get(
+                "text",
+                ""
+            )
+        )
+        for item in items[:15]
+    ).lower()
+
+    if contains_any(
+        combined,
+        [
+            "hack",
+            "exploit",
+            "breach",
+            "stolen",
+            "drained",
+            "outage",
+            "halted"
+        ]
+    ):
+        return "breaking"
+
+    if contains_any(
+        combined,
+        [
+            "lawsuit",
+            "regulator",
+            "regulation",
+            "sec",
+            "ban",
+            "approval"
+        ]
+    ):
+        return "investigative"
+
+    if contains_any(
+        combined,
+        [
+            "github",
+            "repository",
+            "open source",
+            "developer",
+            "sdk",
+            "api",
+            "protocol"
+        ]
+    ):
+        if contains_any(
+            combined,
+            [
+                "ai agent",
+                "ai agents",
+                "stablecoin",
+                "payment"
+            ]
+        ):
+            return "technical"
+
+        return "builder_perspective"
+
+    if contains_any(
+        combined,
+        [
+            "payment",
+            "payments",
+            "stablecoin",
+            "settlement",
+            "remittance"
+        ]
+    ):
+        return "analytical"
+
+    if contains_any(
+        combined,
+        [
+            "nft",
+            "nfts",
+            "memecoin",
+            "meme",
+            "culture"
+        ]
+    ):
+        return "cultural_observation"
+
+    if narratives:
+
+        top_topic = (
+            narratives[0]
+            .get(
+                "topic",
+                ""
+            )
+            .lower()
+        )
+
+        if "defi" in top_topic:
+            return "analytical"
+
+        if "rwa" in top_topic:
+            return "investigative"
+
+    return "market_observation"
 
 
 # ============================================================
@@ -1391,65 +2029,96 @@ def groq_analyze(
 
         return None
 
+    editorial_mode = choose_editorial_mode(
+        items,
+        narratives
+    )
+
     compact_items = []
 
     for index, item in enumerate(
-        items[:18],
+        items[:30],
         start=1
     ):
 
         compact_items.append({
+
             "source_id":
-                index,
+                f"S{index}",
+
             "source":
                 item.get(
-                    "source",
-                    ""
+                    "source"
                 ),
+
             "type":
                 item.get(
-                    "type",
-                    ""
+                    "type"
                 ),
+
             "title":
                 item.get(
-                    "title",
-                    ""
+                    "title"
                 ),
+
             "text":
                 item.get(
                     "text",
                     ""
-                )[:1400],
+                )[:2200],
+
             "url":
                 item.get(
-                    "url",
-                    ""
+                    "url"
                 ),
+
             "signal_score":
                 item.get(
-                    "signal_score",
-                    0
+                    "signal_score"
                 ),
+
             "topics":
                 item.get(
                     "matched_topics",
                     []
+                ),
+
+            "change_24h":
+                item.get(
+                    "change_24h"
+                ),
+
+            "comments":
+                item.get(
+                    "comments"
+                ),
+
+            "stars":
+                item.get(
+                    "stars"
                 )
         })
 
-    system_prompt = """
-You are the senior crypto editorial intelligence
+    system_prompt = r"""
+You are the senior editorial intelligence
 engine for a serious crypto creator.
 
-The creator's niche is:
+Your job is NOT to summarize the internet.
+
+Your job is to find the small number of
+crypto developments worth talking about and
+turn them into differentiated content.
+
+==================================================
+CREATOR POSITIONING
+==================================================
+
+The creator is building long-term authority around:
 
 AI × crypto
 stablecoins
-crypto payments
+payments
 financial infrastructure
-AI agents
-agentic commerce
 RWA
 tokenization
 wallets
@@ -1457,75 +2126,302 @@ onchain finance
 DeFi
 Bitcoin
 Ethereum
-Solana
-NFTs and crypto culture
+Solana when relevant
+NFTs and crypto culture when there is a genuine angle
 
-Your job is NOT to manufacture content.
+The creator wants to become known for:
 
-Your job is to identify whether the available evidence
-contains a story worth publishing.
+seeing important narratives early
+understanding infrastructure
+connecting technology to real-world use
+explaining why something matters
+questioning weak narratives
+finding the second-order effect
 
-EDITORIAL STANDARD:
+Do NOT turn the creator into a generic
+"crypto news" account.
 
-FACT:
-Only state something as a fact if the supplied evidence
-supports it.
+==================================================
+MOST IMPORTANT RULE
+==================================================
 
-INFERENCE:
-Clearly distinguish interpretation from fact.
+DO NOT INVENT FACTS.
 
-FORECAST:
-Clearly identify predictions as predictions.
+Never manufacture:
 
-UNCERTAINTY:
-Do not hide missing evidence.
-
-NEVER INVENT:
 numbers
+dates
 users
-volume
+transaction volumes
 funding
 partnerships
-dates
-quotes
 adoption
 technical capabilities
-events
+quotes
+audits
+regulatory decisions
 outages
+investor behavior
+future timelines
 
-A single Reddit post, Farcaster post, X post or GitHub
-repository is not sufficient evidence for a major claim.
+If the supplied sources do not establish
+something, say that it is unknown.
 
-Prefer convergence between independent sources.
+==================================================
+SOURCE DISCIPLINE
+==================================================
 
-The creator wants to become known for intelligent,
-early and useful crypto commentary.
+Every supplied signal has a source_id.
 
-Avoid generic crypto influencer language.
+Example:
 
-Do NOT automatically use:
+S1
+S2
+S3
 
-"game changer"
-"revolutionary"
-"huge"
-"mass adoption"
-"the future is here"
-"bullish"
-"exciting times"
+Use those source IDs in the final evidence
+section.
 
-unless the evidence genuinely supports it.
+A single source is NOT automatically
+independent confirmation.
 
-The writing should be:
+Social posts are evidence of discussion,
+not necessarily evidence that the underlying
+claim is true.
 
-crypto-native
-sharp
-human
-specific
-analytical
-curious
-occasionally skeptical
+Reddit discussion is evidence of community
+interest, not proof.
 
-Use the most appropriate writing mode:
+GitHub activity proves repository activity,
+not user adoption.
+
+A company's own announcement proves that
+the company made the announcement, not that
+the announcement's claims are independently
+verified.
+
+Market APIs provide market data, not
+explanations for why the market moved.
+
+==================================================
+FACT / INFERENCE / FORECAST
+==================================================
+
+Keep these categories completely separate.
+
+VERIFIED FACT
+
+The supplied source explicitly supports it.
+
+INTERPRETATION
+
+A reasonable conclusion derived from facts.
+
+FORECAST
+
+A possible future outcome.
+
+UNKNOWN
+
+Something the evidence does not establish.
+
+Never write an interpretation as if it were
+a verified fact.
+
+Never write a forecast as if it were certain.
+
+==================================================
+IMPORTANT CLAIM RULE
+==================================================
+
+If a claim is unusually important, controversial,
+numerical, or likely to affect reputation,
+require stronger evidence.
+
+Examples:
+
+"USDT reserves increased by $X"
+"Base processed $X"
+"Solana lost X% of stake"
+"Protocol has X users"
+"company raised $X"
+"X adopted the protocol"
+
+If only one source supports the claim,
+do not present it as independently confirmed.
+
+Use wording such as:
+
+"the company says..."
+"according to..."
+"one report claims..."
+"the repository describes..."
+
+when appropriate.
+
+==================================================
+NARRATIVE DETECTION
+==================================================
+
+A strong narrative is more than a collection
+of articles.
+
+Look for convergence between:
+
+news
+market data
+developer activity
+social discussion
+community interest
+institutional activity
+regulatory activity
+
+The strongest stories often have:
+
+signal + timing + evidence + tension
+
+Examples of useful tension:
+
+institutional confidence
+vs
+real-world adoption
+
+high TPS
+vs
+reliability
+
+stablecoin growth
+vs
+merchant usage
+
+AI agent capability
+vs
+payment infrastructure
+
+regulatory clarity
+vs
+actual implementation
+
+capital inflows
+vs
+fundamental usage
+
+==================================================
+KOL OPPORTUNITY
+==================================================
+
+Score KOL opportunity from 0 to 10.
+
+Consider:
+
+relevance
+novelty
+evidence
+timing
+discussion potential
+differentiation
+second-order insight
+
+0-3:
+
+weak
+
+4-5:
+
+interesting but not strong
+
+6:
+
+worth monitoring
+
+7:
+
+good post opportunity
+
+8:
+
+strong post opportunity
+
+9:
+
+high-value narrative
+
+10:
+
+rare / exceptional opportunity
+
+Do not give 8-10 merely because something
+is trending.
+
+==================================================
+CONFIDENCE
+==================================================
+
+Confidence is 0-100.
+
+This measures confidence in the overall
+editorial assessment.
+
+It does NOT mean probability that a forecast
+will happen.
+
+Examples:
+
+85 means strong evidence for the assessment.
+
+60 means meaningful but incomplete evidence.
+
+35 means speculative.
+
+==================================================
+EVIDENCE SCORE
+==================================================
+
+Evidence score is 0-10.
+
+Consider:
+
+source quality
+independent confirmation
+specificity
+recency
+direct evidence
+
+Do not give 9-10 to a story based primarily
+on social chatter.
+
+==================================================
+DECISION
+==================================================
+
+POST
+
+Use when there is a differentiated and
+well-supported opportunity.
+
+WATCH
+
+Use when the signal is interesting but
+evidence or differentiation is insufficient.
+
+NO_POST
+
+Use when the signal is weak, repetitive,
+misleading, trivial, or unsupported.
+
+IMPORTANT:
+
+Do not generate draft content for NO_POST.
+
+For WATCH, generate a draft only if there is
+a clear research angle and confidence is high
+enough to be useful.
+
+==================================================
+WRITING MODES
+==================================================
+
+Choose based on the actual story.
 
 breaking
 quick_take
@@ -1542,578 +2438,618 @@ market_observation
 builder_perspective
 cultural_observation
 
-POSTING RULE:
+Do NOT always choose analytical.
 
-If the evidence is weak:
+==================================================
+WRITING STYLE
+==================================================
 
-decision = WATCH
+Sound:
 
-or
+crypto-native
+sharp
+human
+observant
+curious
+specific
+occasionally skeptical
 
-decision = NO_POST
+Do not sound like:
 
-Do not create a post simply because content was requested.
+corporate PR
+AI-generated newsletters
+generic crypto influencers
+marketing copy
 
-A strong opportunity should have some combination of:
+Avoid clichés:
 
-timeliness
-evidence
-novelty
-relevance
-discussion
-multiple-source confirmation
-clear creator angle
+"game changer"
+"revolutionary"
+"the future is here"
+"this is huge"
+"mass adoption is coming"
+"bullish"
+"exciting times ahead"
 
-IMPORTANT:
+unless there is an extremely specific reason.
 
-Return ONLY valid JSON.
+Do not use "finally" as a generic hook.
 
-No markdown.
-No code fences.
-No commentary outside JSON.
+Do not manufacture certainty.
+
+Do not use excessive emojis.
+
+Do not automatically add hashtags.
+
+Do not stuff keywords.
+
+==================================================
+HOOK RULES
+==================================================
+
+Hooks should create curiosity through:
+
+a surprising fact
+a tension
+a contradiction
+a useful observation
+a specific number
+a question worth answering
+
+Bad:
+
+"AI is changing crypto."
+
+Better:
+
+"the interesting part of AI agents isn't
+what they can do. it's how they will pay
+for it."
+
+Only use a numerical hook when the supplied
+evidence supports the number.
+
+==================================================
+CONTENT FORMATS
+==================================================
+
+Choose the format that best fits the story.
+
+short_post
+thread
+quote_post
+reply
+research_note
+
+Do not produce a thread simply because a
+topic is important.
+
+==================================================
+POST QUALITY TEST
+==================================================
+
+Before generating content ask:
+
+Would an informed crypto user learn something?
+
+Is there a specific observation?
+
+Is the angle differentiated?
+
+Is the evidence sufficient?
+
+Is there a second-order implication?
+
+Could 10,000 crypto AI accounts post this
+exact same thing?
+
+If yes, improve the angle.
+
+==================================================
+NO-FORCED-CONTENT RULE
+==================================================
+
+The system must be comfortable saying:
+
+NO_POST
+
+or:
+
+WATCH
+
+There is no reward for producing content
+about everything.
+
+The creator's reputation is more important
+than posting frequency.
+
+==================================================
+OUTPUT
+==================================================
+
+Return VALID JSON ONLY.
+
+Use exactly this general structure:
+
+{
+  "decision": "POST|WATCH|NO_POST",
+
+  "summary": "...",
+
+  "confidence": 0,
+
+  "evidence_score": 0,
+
+  "kol_opportunity_score": 0,
+
+  "writing_mode": "...",
+
+  "narratives": [],
+
+  "narrative_status":
+    "new|emerging|accelerating|cooling|stable",
+
+  "verified_facts": [],
+
+  "interpretations": [],
+
+  "forecasts": [],
+
+  "unknowns": [],
+
+  "why_it_matters": [],
+
+  "content_opportunities": [
+    {
+      "title": "...",
+      "angle": "..."
+    }
+  ],
+
+  "recommended_posts": [
+    {
+      "format": "...",
+      "hook": "...",
+      "angle": "...",
+      "post": "...",
+      "source_ids": []
+    }
+  ],
+
+  "sources": [
+    {
+      "claim": "...",
+      "source_ids": []
+    }
+  ]
+}
+
+==================================================
+STRICT OUTPUT RULE
+==================================================
+
+confidence MUST be a number between 0 and 100.
+
+evidence_score MUST be a number between 0 and 10.
+
+kol_opportunity_score MUST be a number between
+0 and 10.
+
+Never return confidence such as 0.85 when the
+intended meaning is 85.
+
+==================================================
+FINAL EDITORIAL RULE
+==================================================
+
+The creator is building a reputation over years.
+
+Protect credibility.
+
+A missed story is better than publishing
+something wrong.
+
+A cautious observation with a sharp angle
+is better than an exaggerated prediction.
 """
 
-    user_prompt = {
+
+    user_payload = {
+
+        "editorial_mode_hint":
+            editorial_mode,
+
         "previous_narratives":
-            previous_topics[-30:],
+            previous_topics[-75:],
 
         "narrative_clusters":
-            narratives[:10],
+            narratives[:15],
 
         "signals":
             compact_items,
 
         "task":
             """
-Analyze these crypto signals.
+Analyze these signals as a senior crypto
+editorial desk.
+
+Find the strongest narrative.
 
 Determine:
 
-1. what is verified
-2. what is inferred
-3. what remains uncertain
-4. whether the narrative is new, emerging,
-   accelerating, cooling or stable
-5. whether the creator should post
-6. the strongest differentiated angle
-7. the best writing mode
-8. the strongest content opportunities
-9. the best draft posts
+1. What is verified?
+2. What is only an interpretation?
+3. What is a forecast?
+4. What remains unknown?
+5. How strong is the evidence?
+6. How much independent source support exists?
+7. Is the narrative new, emerging, accelerating,
+   cooling, or stable?
+8. Is this worth posting?
+9. What angle would differentiate the creator?
+10. What writing mode fits the story?
+11. What content format fits the story?
 
-Do not combine unrelated signals into one story.
+Do not force a post.
 
-Do not treat repeated copies of the same story
-as independent confirmation.
+Use source IDs.
 
-When possible, prefer multiple independent sources.
+If a major claim comes from only one source,
+make that explicit.
 
-The creator's long-term reputation is more important
-than posting frequency.
+If the story is weak, return WATCH or NO_POST.
 """
     }
 
-    payload = {
-        "model":
-            GROQ_MODEL,
 
-        "temperature":
-            0.45,
+    response = safe_post(
 
-        "max_tokens":
-            5000,
-
-        "messages": [
-            {
-                "role":
-                    "system",
-                "content":
-                    system_prompt
-            },
-            {
-                "role":
-                    "user",
-                "content":
-                    json.dumps(
-                        user_prompt,
-                        ensure_ascii=False
-                    )
-            }
-        ],
-
-        "response_format": {
-            "type":
-                "json_schema",
-
-            "json_schema": {
-                "name":
-                    "crypto_editorial_analysis",
-
-                "strict":
-                    True,
-
-                "schema": {
-
-                    "type":
-                        "object",
-
-                    "additionalProperties":
-                        False,
-
-                    "properties": {
-
-                        "decision": {
-                            "type":
-                                "string",
-                            "enum": [
-                                "POST",
-                                "WATCH",
-                                "NO_POST"
-                            ]
-                        },
-
-                        "summary": {
-                            "type":
-                                "string"
-                        },
-
-                        "confidence": {
-                            "type":
-                                "number"
-                        },
-
-                        "evidence_score": {
-                            "type":
-                                "number"
-                        },
-
-                        "kol_opportunity_score": {
-                            "type":
-                                "number"
-                        },
-
-                        "writing_mode": {
-                            "type":
-                                "string"
-                        },
-
-                        "narratives": {
-                            "type":
-                                "array",
-                            "items": {
-                                "type":
-                                    "string"
-                            }
-                        },
-
-                        "narrative_status": {
-                            "type":
-                                "string",
-                            "enum": [
-                                "new",
-                                "emerging",
-                                "accelerating",
-                                "cooling",
-                                "stable"
-                            ]
-                        },
-
-                        "verified_facts": {
-                            "type":
-                                "array",
-                            "items": {
-                                "type":
-                                    "string"
-                            }
-                        },
-
-                        "interpretations": {
-                            "type":
-                                "array",
-                            "items": {
-                                "type":
-                                    "string"
-                            }
-                        },
-
-                        "forecasts": {
-                            "type":
-                                "array",
-                            "items": {
-                                "type":
-                                    "string"
-                            }
-                        },
-
-                        "unverified_claims": {
-                            "type":
-                                "array",
-                            "items": {
-                                "type":
-                                    "string"
-                            }
-                        },
-
-                        "why_it_matters": {
-                            "type":
-                                "array",
-                            "items": {
-                                "type":
-                                    "string"
-                            }
-                        },
-
-                        "content_opportunities": {
-                            "type":
-                                "array",
-
-                            "items": {
-                                "type":
-                                    "object",
-
-                                "additionalProperties":
-                                    False,
-
-                                "properties": {
-
-                                    "title": {
-                                        "type":
-                                            "string"
-                                    },
-
-                                    "angle": {
-                                        "type":
-                                            "string"
-                                    }
-                                },
-
-                                "required": [
-                                    "title",
-                                    "angle"
-                                ]
-                            }
-                        },
-
-                        "recommended_posts": {
-                            "type":
-                                "array",
-
-                            "items": {
-                                "type":
-                                    "object",
-
-                                "additionalProperties":
-                                    False,
-
-                                "properties": {
-
-                                    "format": {
-                                        "type":
-                                            "string"
-                                    },
-
-                                    "hook": {
-                                        "type":
-                                            "string"
-                                    },
-
-                                    "angle": {
-                                        "type":
-                                            "string"
-                                    },
-
-                                    "post": {
-                                        "type":
-                                            "string"
-                                    }
-                                },
-
-                                "required": [
-                                    "format",
-                                    "hook",
-                                    "angle",
-                                    "post"
-                                ]
-                            }
-                        },
-
-                        "sources": {
-                            "type":
-                                "array",
-
-                            "items": {
-                                "type":
-                                    "object",
-
-                                "additionalProperties":
-                                    False,
-
-                                "properties": {
-
-                                    "claim": {
-                                        "type":
-                                            "string"
-                                    },
-
-                                    "source_ids": {
-                                        "type":
-                                            "array",
-
-                                        "items": {
-                                            "type":
-                                                "integer"
-                                        }
-                                    }
-                                },
-
-                                "required": [
-                                    "claim",
-                                    "source_ids"
-                                ]
-                            }
-                        }
-                    },
-
-                    "required": [
-                        "decision",
-                        "summary",
-                        "confidence",
-                        "evidence_score",
-                        "kol_opportunity_score",
-                        "writing_mode",
-                        "narratives",
-                        "narrative_status",
-                        "verified_facts",
-                        "interpretations",
-                        "forecasts",
-                        "unverified_claims",
-                        "why_it_matters",
-                        "content_opportunities",
-                        "recommended_posts",
-                        "sources"
-                    ]
-                }
-            }
-        }
-    }
-
-    url = (
         "https://api.groq.com/openai/v1/"
-        "chat/completions"
+        "chat/completions",
+
+        headers={
+
+            "Authorization":
+                f"Bearer {GROQ_API_KEY}",
+
+            "Content-Type":
+                "application/json"
+        },
+
+        json={
+
+            "model":
+                GROQ_MODEL,
+
+            "temperature":
+                0.35,
+
+            "max_tokens":
+                7000,
+
+            "response_format": {
+                "type":
+                    "json_object"
+            },
+
+            "messages": [
+
+                {
+                    "role":
+                        "system",
+
+                    "content":
+                        system_prompt
+                },
+
+                {
+                    "role":
+                        "user",
+
+                    "content":
+                        json.dumps(
+                            user_payload,
+                            ensure_ascii=False
+                        )
+                }
+            ]
+        }
     )
 
-    try:
-
-        response = SESSION.post(
-            url,
-            headers={
-                "Authorization":
-                    f"Bearer {GROQ_API_KEY}",
-
-                "Content-Type":
-                    "application/json"
-            },
-            json=payload,
-            timeout=90
-        )
-
-    except Exception as exc:
-
-        print(
-            f"[GROQ REQUEST ERROR] {exc}"
-        )
-
-        return None
-
-    if response.status_code != 200:
-
-        print(
-            "\n=============================="
-        )
-
-        print(
-            "[GROQ ERROR]"
-        )
-
-        print(
-            f"HTTP STATUS: "
-            f"{response.status_code}"
-        )
-
-        print(
-            response.text[:5000]
-        )
-
-        print(
-            "==============================\n"
-        )
-
+    if not response:
         return None
 
     try:
 
         data = response.json()
 
-    except Exception as exc:
-
-        print(
-            f"[GROQ RESPONSE JSON ERROR] "
-            f"{exc}"
+        choices = data.get(
+            "choices",
+            []
         )
 
-        print(
-            response.text[:3000]
-        )
-
-        return None
-
-    try:
+        if not choices:
+            print(
+                "[GROQ] No choices returned"
+            )
+            return None
 
         content = (
-            data
-            ["choices"]
-            [0]
-            ["message"]
-            ["content"]
+            choices[0]
+            .get("message", {})
+            .get("content", "")
         )
 
-    except Exception as exc:
+        if not content:
+            print(
+                "[GROQ] Empty content"
+            )
+            return None
 
-        print(
-            f"[GROQ CONTENT ERROR] "
-            f"{exc}"
-        )
+        # Defensive JSON cleanup.
+        content = content.strip()
 
-        print(
-            json.dumps(
-                data,
-                indent=2
-            )[:5000]
-        )
+        if content.startswith(
+            "```json"
+        ):
 
-        return None
+            content = content[
+                7:
+            ].strip()
 
-    if not content:
+        if content.endswith(
+            "```"
+        ):
 
-        print(
-            "[GROQ] Empty model response"
-        )
-
-        return None
-
-    try:
+            content = content[
+                :-3
+            ].strip()
 
         result = json.loads(
             content
         )
 
-    except json.JSONDecodeError as exc:
+        return normalize_analysis(
+            result
+        )
+
+    except Exception as exc:
 
         print(
-            f"[GROQ JSON PARSE ERROR] "
+            f"[GROQ PARSE ERROR] "
             f"{exc}"
         )
 
-        print(
-            "RAW MODEL OUTPUT:"
-        )
+        try:
 
-        print(
-            content[:5000]
-        )
+            print(
+                response.text[:2000]
+            )
+
+        except Exception:
+            pass
 
         return None
 
-    required_fields = [
-        "decision",
-        "summary",
-        "confidence",
-        "evidence_score",
-        "kol_opportunity_score",
-        "writing_mode",
+
+# ============================================================
+# NORMALIZE AI OUTPUT
+# ============================================================
+
+def normalize_analysis(
+    analysis
+):
+
+    if not isinstance(
+        analysis,
+        dict
+    ):
+        return None
+
+    # --------------------------------------------------------
+    # DECISION
+    # --------------------------------------------------------
+
+    decision = str(
+        analysis.get(
+            "decision",
+            "WATCH"
+        )
+    ).upper().strip()
+
+    if decision not in {
+        "POST",
+        "WATCH",
+        "NO_POST"
+    }:
+
+        decision = "WATCH"
+
+    analysis[
+        "decision"
+    ] = decision
+
+    # --------------------------------------------------------
+    # CONFIDENCE
+    # --------------------------------------------------------
+
+    confidence = safe_number(
+        analysis.get(
+            "confidence",
+            0
+        )
+    )
+
+    # If model accidentally returns 0.85,
+    # interpret it as 85 only when it is <= 1.
+    if 0 < confidence <= 1:
+        confidence *= 100
+
+    analysis[
+        "confidence"
+    ] = round(
+        max(
+            0,
+            min(
+                confidence,
+                100
+            )
+        ),
+        1
+    )
+
+    # --------------------------------------------------------
+    # EVIDENCE
+    # --------------------------------------------------------
+
+    evidence = safe_number(
+        analysis.get(
+            "evidence_score",
+            0
+        )
+    )
+
+    if 0 < evidence <= 1:
+        evidence *= 10
+
+    analysis[
+        "evidence_score"
+    ] = round(
+        max(
+            0,
+            min(
+                evidence,
+                10
+            )
+        ),
+        1
+    )
+
+    # --------------------------------------------------------
+    # KOL SCORE
+    # --------------------------------------------------------
+
+    kol = safe_number(
+        analysis.get(
+            "kol_opportunity_score",
+            0
+        )
+    )
+
+    if 0 < kol <= 1:
+        kol *= 10
+
+    analysis[
+        "kol_opportunity_score"
+    ] = round(
+        max(
+            0,
+            min(
+                kol,
+                10
+            )
+        ),
+        1
+    )
+
+    # --------------------------------------------------------
+    # ARRAYS
+    # --------------------------------------------------------
+
+    array_fields = [
         "narratives",
-        "narrative_status",
         "verified_facts",
         "interpretations",
         "forecasts",
-        "unverified_claims",
+        "unknowns",
         "why_it_matters",
         "content_opportunities",
         "recommended_posts",
         "sources"
     ]
 
-    missing = [
-        field
-        for field in required_fields
-        if field not in result
-    ]
+    for field in array_fields:
 
-    if missing:
+        if not isinstance(
+            analysis.get(field),
+            list
+        ):
 
-        print(
-            "[GROQ] Missing fields:"
+            analysis[field] = []
+
+    # --------------------------------------------------------
+    # DECISION SAFETY
+    # --------------------------------------------------------
+
+    # Don't allow a weak opportunity to masquerade
+    # as a strong POST.
+    if (
+        decision == "POST"
+        and (
+            analysis["kol_opportunity_score"]
+            < POST_THRESHOLD
+            or analysis["evidence_score"]
+            < 5.5
         )
+    ):
 
-        print(
-            missing
-        )
+        analysis[
+            "decision"
+        ] = "WATCH"
 
-        print(
-            json.dumps(
-                result,
-                indent=2,
-                ensure_ascii=False
-            )[:5000]
-        )
+    # --------------------------------------------------------
+    # NO POST MUST NOT CONTAIN CONTENT DRAFTS
+    # --------------------------------------------------------
 
-        return None
+    if analysis[
+        "decision"
+    ] == "NO_POST":
 
-    print(
-        "[GROQ] Editorial analysis successful"
-    )
+        analysis[
+            "recommended_posts"
+        ] = []
 
-    print(
-        f"[GROQ] Decision: "
-        f"{result.get('decision')}"
-    )
-
-    print(
-        f"[GROQ] Confidence: "
-        f"{result.get('confidence')}"
-    )
-
-    print(
-        f"[GROQ] Evidence: "
-        f"{result.get('evidence_score')}"
-    )
-
-    print(
-        f"[GROQ] KOL opportunity: "
-        f"{result.get('kol_opportunity_score')}"
-    )
-
-    return result
+    return analysis
 
 
 # ============================================================
-# TELEGRAM EDITORIAL FORMATTER
+# TELEGRAM FORMAT HELPERS
 # ============================================================
 
-def format_opportunity(opportunity):
+def escape_html(text):
+
+    if text is None:
+        return ""
+
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+    )
+
+
+def format_opportunity(
+    opportunity
+):
 
     if isinstance(
         opportunity,
         dict
     ):
 
-        title = opportunity.get(
-            "title",
-            ""
+        title = escape_html(
+            opportunity.get(
+                "title",
+                ""
+            )
         )
 
-        angle = opportunity.get(
-            "angle",
-            ""
+        angle = escape_html(
+            opportunity.get(
+                "angle",
+                ""
+            )
         )
 
         return (
@@ -2122,14 +3058,18 @@ def format_opportunity(opportunity):
         )
 
     return (
-        f"• {str(opportunity)}"
+        f"• "
+        f"{escape_html(opportunity)}"
     )
 
 
+# ============================================================
+# TELEGRAM ALERT FORMAT
+# ============================================================
+
 def format_alert(
     analysis,
-    items,
-    narratives
+    items
 ):
 
     if not analysis:
@@ -2147,6 +3087,10 @@ def format_alert(
     )
 
     lines.append("")
+
+    # --------------------------------------------------------
+    # DECISION
+    # --------------------------------------------------------
 
     if decision == "POST":
 
@@ -2168,62 +3112,112 @@ def format_alert(
 
     lines.append("")
 
-    summary = analysis.get(
-        "summary",
-        ""
+    # --------------------------------------------------------
+    # SUMMARY
+    # --------------------------------------------------------
+
+    summary = escape_html(
+        analysis.get(
+            "summary",
+            ""
+        )
     )
 
     if summary:
 
         lines.append(
-            f"<b>{summary}</b>"
+            summary
         )
 
-    lines.append("")
+        lines.append("")
+
+    # --------------------------------------------------------
+    # SCORES
+    # --------------------------------------------------------
+
+    confidence = analysis.get(
+        "confidence",
+        0
+    )
+
+    evidence = analysis.get(
+        "evidence_score",
+        0
+    )
+
+    kol = analysis.get(
+        "kol_opportunity_score",
+        0
+    )
+
+    mode = escape_html(
+        analysis.get(
+            "writing_mode",
+            "n/a"
+        )
+    )
+
+    narrative_status = escape_html(
+        analysis.get(
+            "narrative_status",
+            "stable"
+        )
+    )
 
     lines.append(
         f"🎯 confidence: "
-        f"<b>{analysis.get('confidence', 0)}/100</b>"
+        f"<b>{confidence}/100</b>"
     )
 
     lines.append(
         f"🔎 evidence: "
-        f"<b>{analysis.get('evidence_score', 0)}/10</b>"
+        f"<b>{evidence}/10</b>"
     )
 
     lines.append(
         f"💡 KOL opportunity: "
-        f"<b>{analysis.get('kol_opportunity_score', 0)}/10</b>"
+        f"<b>{kol}/10</b>"
     )
 
     lines.append(
         f"✍️ mode: "
-        f"<b>{analysis.get('writing_mode', 'n/a')}</b>"
+        f"<b>{mode}</b>"
     )
 
     lines.append(
         f"📈 narrative: "
-        f"<b>{analysis.get('narrative_status', 'stable')}</b>"
+        f"<b>{narrative_status}</b>"
     )
 
-    story_narratives = analysis.get(
+    # --------------------------------------------------------
+    # NARRATIVES
+    # --------------------------------------------------------
+
+    narratives = analysis.get(
         "narratives",
         []
     )
 
-    if story_narratives:
+    if narratives:
 
         lines.append("")
 
         lines.append(
-            "<b>narratives</b>"
+            "<b>NARRATIVES</b>"
         )
 
-        for narrative in story_narratives[:5]:
+        for narrative in narratives[:5]:
 
             lines.append(
-                f"• {narrative}"
+                "• "
+                + escape_html(
+                    narrative
+                )
             )
+
+    # --------------------------------------------------------
+    # VERIFIED FACTS
+    # --------------------------------------------------------
 
     facts = analysis.get(
         "verified_facts",
@@ -2235,14 +3229,21 @@ def format_alert(
         lines.append("")
 
         lines.append(
-            "<b>what we know</b>"
+            "<b>WHAT WE KNOW</b>"
         )
 
         for fact in facts[:5]:
 
             lines.append(
-                f"✓ {fact}"
+                "✓ "
+                + escape_html(
+                    fact
+                )
             )
+
+    # --------------------------------------------------------
+    # INTERPRETATIONS
+    # --------------------------------------------------------
 
     interpretations = analysis.get(
         "interpretations",
@@ -2254,14 +3255,21 @@ def format_alert(
         lines.append("")
 
         lines.append(
-            "<b>what we're inferring</b>"
+            "<b>WHAT WE'RE INFERRING</b>"
         )
 
         for point in interpretations[:4]:
 
             lines.append(
-                f"→ {point}"
+                "→ "
+                + escape_html(
+                    point
+                )
             )
+
+    # --------------------------------------------------------
+    # FORECASTS
+    # --------------------------------------------------------
 
     forecasts = analysis.get(
         "forecasts",
@@ -2273,33 +3281,47 @@ def format_alert(
         lines.append("")
 
         lines.append(
-            "<b>what could happen next</b>"
+            "<b>WHAT COULD HAPPEN NEXT</b>"
         )
 
         for point in forecasts[:3]:
 
             lines.append(
-                f"↗ {point}"
+                "↗ "
+                + escape_html(
+                    point
+                )
             )
 
-    uncertain = analysis.get(
-        "unverified_claims",
+    # --------------------------------------------------------
+    # UNKNOWN
+    # --------------------------------------------------------
+
+    unknowns = analysis.get(
+        "unknowns",
         []
     )
 
-    if uncertain:
+    if unknowns:
 
         lines.append("")
 
         lines.append(
-            "<b>⚠ what we don't know</b>"
+            "<b>⚠ WHAT WE DON'T KNOW</b>"
         )
 
-        for point in uncertain[:4]:
+        for point in unknowns[:4]:
 
             lines.append(
-                f"⚠ {point}"
+                "⚠ "
+                + escape_html(
+                    point
+                )
             )
+
+    # --------------------------------------------------------
+    # WHY IT MATTERS
+    # --------------------------------------------------------
 
     why = analysis.get(
         "why_it_matters",
@@ -2311,14 +3333,21 @@ def format_alert(
         lines.append("")
 
         lines.append(
-            "<b>why it matters</b>"
+            "<b>WHY IT MATTERS</b>"
         )
 
         for point in why[:4]:
 
             lines.append(
-                f"• {point}"
+                "• "
+                + escape_html(
+                    point
+                )
             )
+
+    # --------------------------------------------------------
+    # CONTENT OPPORTUNITIES
+    # --------------------------------------------------------
 
     opportunities = analysis.get(
         "content_opportunities",
@@ -2345,6 +3374,10 @@ def format_alert(
                 )
             )
 
+    # --------------------------------------------------------
+    # DRAFT CONTENT
+    # --------------------------------------------------------
+
     posts = analysis.get(
         "recommended_posts",
         []
@@ -2367,24 +3400,43 @@ def format_alert(
             start=1
         ):
 
-            fmt = post.get(
-                "format",
-                ""
+            if not isinstance(
+                post,
+                dict
+            ):
+                continue
+
+            fmt = escape_html(
+                post.get(
+                    "format",
+                    ""
+                )
             )
 
-            hook = post.get(
-                "hook",
-                ""
+            hook = escape_html(
+                post.get(
+                    "hook",
+                    ""
+                )
             )
 
-            angle = post.get(
-                "angle",
-                ""
+            angle = escape_html(
+                post.get(
+                    "angle",
+                    ""
+                )
             )
 
-            body = post.get(
-                "post",
-                ""
+            body = escape_html(
+                post.get(
+                    "post",
+                    ""
+                )
+            )
+
+            source_ids = post.get(
+                "source_ids",
+                []
             )
 
             lines.append("")
@@ -2413,6 +3465,24 @@ def format_alert(
                     body
                 )
 
+            if source_ids:
+
+                lines.append("")
+
+                lines.append(
+                    "sources: "
+                    + escape_html(
+                        ", ".join(
+                            str(x)
+                            for x in source_ids
+                        )
+                    )
+                )
+
+    # --------------------------------------------------------
+    # EVIDENCE MAP
+    # --------------------------------------------------------
+
     sources = analysis.get(
         "sources",
         []
@@ -2427,14 +3497,22 @@ def format_alert(
         )
 
         lines.append(
-            "<b>EVIDENCE</b>"
+            "<b>EVIDENCE MAP</b>"
         )
 
-        for source in sources[:6]:
+        for source in sources[:8]:
 
-            claim = source.get(
-                "claim",
-                ""
+            if not isinstance(
+                source,
+                dict
+            ):
+                continue
+
+            claim = escape_html(
+                source.get(
+                    "claim",
+                    ""
+                )
             )
 
             source_ids = source.get(
@@ -2449,12 +3527,18 @@ def format_alert(
             if source_ids:
 
                 lines.append(
-                    "  sources: "
-                    + ", ".join(
-                        str(x)
-                        for x in source_ids
+                    "  "
+                    + escape_html(
+                        ", ".join(
+                            str(x)
+                            for x in source_ids
+                        )
                     )
                 )
+
+    # --------------------------------------------------------
+    # SOURCE LINKS
+    # --------------------------------------------------------
 
     top_items = sorted(
         items,
@@ -2476,7 +3560,10 @@ def format_alert(
 
         used_urls = set()
 
-        for item in top_items[:7]:
+        for index, item in enumerate(
+            top_items[:8],
+            start=1
+        ):
 
             url = item.get(
                 "url",
@@ -2500,20 +3587,179 @@ def format_alert(
                 url
             )
 
-            safe_title = (
-                title[:90]
-                .replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;")
+            safe_url = escape_html(
+                url
+            )
+
+            safe_title = escape_html(
+                title[:100]
             )
 
             lines.append(
-                f'• <a href="{url}">'
+                f'• <a href="{safe_url}">'
                 f'{safe_title}</a>'
             )
 
     return "\n".join(
         lines
+    )
+
+
+# ============================================================
+# TELEGRAM MESSAGE LENGTH
+# ============================================================
+
+def send_long_telegram(
+    message
+):
+
+    if len(message) <= 3900:
+
+        return telegram(
+            message
+        )
+
+    # Telegram limit safety.
+    chunks = []
+
+    remaining = message
+
+    while remaining:
+
+        if len(remaining) <= 3900:
+
+            chunks.append(
+                remaining
+            )
+
+            break
+
+        split_at = remaining.rfind(
+            "\n",
+            0,
+            3900
+        )
+
+        if split_at < 1000:
+
+            split_at = 3900
+
+        chunks.append(
+            remaining[
+                :split_at
+            ]
+        )
+
+        remaining = remaining[
+            split_at:
+        ].lstrip()
+
+    success = True
+
+    for chunk in chunks:
+
+        if not telegram(
+            chunk
+        ):
+
+            success = False
+
+    return success
+
+
+# ============================================================
+# MEMORY
+# ============================================================
+
+def update_memory(
+    seen,
+    candidates,
+    topic_history,
+    narrative_clusters,
+    analysis
+):
+
+    for item in candidates:
+
+        item_id = item.get(
+            "id"
+        )
+
+        if item_id:
+
+            seen.add(
+                item_id
+            )
+
+    narrative_names = [
+
+        cluster.get(
+            "topic"
+        )
+
+        for cluster
+        in narrative_clusters[:10]
+
+        if cluster.get(
+            "topic"
+        )
+    ]
+
+    if narrative_names:
+
+        topic_history.append({
+
+            "timestamp":
+                now(),
+
+            "narratives":
+                narrative_names,
+
+            "confidence":
+                analysis.get(
+                    "confidence",
+                    0
+                ),
+
+            "evidence_score":
+                analysis.get(
+                    "evidence_score",
+                    0
+                ),
+
+            "kol_opportunity_score":
+                analysis.get(
+                    "kol_opportunity_score",
+                    0
+                ),
+
+            "decision":
+                analysis.get(
+                    "decision",
+                    "WATCH"
+                ),
+
+            "narrative_status":
+                analysis.get(
+                    "narrative_status",
+                    "stable"
+                ),
+
+            "writing_mode":
+                analysis.get(
+                    "writing_mode",
+                    ""
+                )
+        })
+
+    save_json(
+        SEEN_FILE,
+        list(seen)[-5000:]
+    )
+
+    save_json(
+        TOPIC_FILE,
+        topic_history[-750:]
     )
 
 
@@ -2524,7 +3770,7 @@ def format_alert(
 def main():
 
     print(
-        "======================================"
+        "=============================================="
     )
 
     print(
@@ -2536,11 +3782,7 @@ def main():
     )
 
     print(
-        f"Groq model: {GROQ_MODEL}"
-    )
-
-    print(
-        "======================================"
+        "=============================================="
     )
 
     seen = set(
@@ -2557,39 +3799,51 @@ def main():
 
     all_items = []
 
+    # ========================================================
+    # COLLECTORS
+    # ========================================================
+
     collectors = [
+
         (
             "CoinMarketCap",
             fetch_coinmarketcap
         ),
+
         (
             "CoinGecko",
             fetch_coingecko
         ),
+
         (
             "RSS",
             fetch_rss
         ),
+
         (
             "Reddit",
             fetch_reddit
         ),
+
         (
             "LunarCrush",
             fetch_lunarcrush
         ),
+
         (
             "Neynar",
             fetch_neynar
         ),
+
         (
             "Sorsa",
             fetch_sorsa
         ),
+
         (
             "GitHub",
             fetch_github
-        ),
+        )
     ]
 
     for name, collector in collectors:
@@ -2622,6 +3876,10 @@ def main():
         f"\nTOTAL RAW SIGNALS: "
         f"{len(all_items)}"
     )
+
+    # ========================================================
+    # DEDUPLICATE
+    # ========================================================
 
     candidates = []
 
@@ -2681,6 +3939,10 @@ def main():
         f"{len(candidates)}"
     )
 
+    # ========================================================
+    # NARRATIVE CLUSTERS
+    # ========================================================
+
     narrative_clusters = (
         build_narrative_clusters(
             candidates
@@ -2691,18 +3953,31 @@ def main():
         "\nNARRATIVE CLUSTERS:"
     )
 
-    for cluster in narrative_clusters[:10]:
+    for cluster in narrative_clusters[:12]:
 
         print(
-            f"  {cluster['topic']} "
-            f"| signals={cluster['item_count']} "
-            f"| sources={cluster['source_count']} "
-            f"| score={cluster['score']}"
+            f"  "
+            f"{cluster.get('topic')} "
+            f"| signals="
+            f"{cluster.get('item_count')} "
+            f"| sources="
+            f"{cluster.get('source_count')} "
+            f"| domains="
+            f"{cluster.get('domain_count')} "
+            f"| score="
+            f"{cluster.get('score')}"
         )
 
+    # ========================================================
+    # STRONG SIGNALS
+    # ========================================================
+
     strong_candidates = [
+
         item
+
         for item in candidates
+
         if item.get(
             "signal_score",
             0
@@ -2710,13 +3985,12 @@ def main():
     ]
 
     strong_candidates = (
-        strong_candidates[:30]
+        strong_candidates[:40]
     )
 
-    print(
-        f"STRONG SIGNALS: "
-        f"{len(strong_candidates)}"
-    )
+    # ========================================================
+    # NO SIGNAL
+    # ========================================================
 
     if not strong_candidates:
 
@@ -2724,147 +3998,172 @@ def main():
             "No strong signals."
         )
 
-        for item in candidates[:50]:
+        # Mark scanned items as seen.
+        for item in candidates[:100]:
 
-            seen.add(
-                item["id"]
-            )
+            if item.get("id"):
+
+                seen.add(
+                    item["id"]
+                )
 
         save_json(
             SEEN_FILE,
-            list(seen)[-3000:]
+            list(seen)[-5000:]
         )
 
         telegram(
-            "🛰 <b>Web3Station scan</b>\n\n"
+
+            "🛰 <b>WEB3STATION SCAN</b>\n\n"
+
             "No high-confidence narrative "
             "detected in this scan.\n\n"
+
             f"Sources scanned: "
             f"{len(collectors)}\n"
+
             f"New signals: "
             f"{len(candidates)}\n\n"
-            "The bot will keep watching."
+
+            "The desk is still watching."
         )
 
         return
 
-    print(
-        "\n[GROQ] Starting editorial analysis..."
-    )
+    # ========================================================
+    # AI ANALYSIS
+    # ========================================================
 
     analysis = groq_analyze(
+
         strong_candidates,
+
         narrative_clusters,
+
         topic_history
     )
 
     if not analysis:
 
         print(
-            "\n[EDITORIAL] Analysis failed."
+            "AI analysis failed."
         )
 
         telegram(
+
             "⚠️ <b>WEB3STATION</b>\n\n"
-            "Signals were collected, but the "
-            "editorial AI layer failed during "
-            "this scan.\n\n"
-            "Check the GitHub Actions log for "
-            "the exact Groq error.\n\n"
+
+            "Signals were collected, but "
+            "the editorial AI layer failed "
+            "during this scan.\n\n"
+
             "The next scheduled scan will retry."
         )
 
         return
 
+    # ========================================================
+    # SECONDARY SAFETY CHECK
+    # ========================================================
+
+    decision = analysis.get(
+        "decision",
+        "WATCH"
+    )
+
+    confidence = analysis.get(
+        "confidence",
+        0
+    )
+
+    evidence = analysis.get(
+        "evidence_score",
+        0
+    )
+
+    kol = analysis.get(
+        "kol_opportunity_score",
+        0
+    )
+
+    # If model says POST but evidence is poor,
+    # downgrade it.
+    if (
+
+        decision == "POST"
+
+        and (
+
+            evidence < 5.5
+
+            or kol < POST_THRESHOLD
+
+        )
+
+    ):
+
+        analysis[
+            "decision"
+        ] = "WATCH"
+
+        decision = "WATCH"
+
+    # --------------------------------------------------------
+    # Extremely low evidence
+    # --------------------------------------------------------
+
+    if evidence < 3.5:
+
+        analysis[
+            "decision"
+        ] = "NO_POST"
+
+        analysis[
+            "recommended_posts"
+        ] = []
+
+        decision = "NO_POST"
+
+    # ========================================================
+    # TELEGRAM
+    # ========================================================
+
     message = format_alert(
+
         analysis,
-        strong_candidates,
-        narrative_clusters
+
+        strong_candidates
     )
 
     if message:
 
-        if len(message) > 3900:
-
-            message = (
-                message[:3900]
-                + "\n\n..."
-            )
-
-        telegram(
+        send_long_telegram(
             message
         )
 
-    for item in candidates:
+    # ========================================================
+    # MEMORY
+    # ========================================================
 
-        seen.add(
-            item["id"]
-        )
+    update_memory(
 
-    narrative_names = [
-        cluster["topic"]
-        for cluster
-        in narrative_clusters[:10]
-    ]
+        seen,
 
-    if narrative_names:
+        candidates,
 
-        topic_history.append({
-            "timestamp":
-                now(),
+        topic_history,
 
-            "narratives":
-                narrative_names,
+        narrative_clusters,
 
-            "confidence":
-                analysis.get(
-                    "confidence",
-                    0
-                ),
-
-            "evidence_score":
-                analysis.get(
-                    "evidence_score",
-                    0
-                ),
-
-            "kol_opportunity_score":
-                analysis.get(
-                    "kol_opportunity_score",
-                    0
-                ),
-
-            "decision":
-                analysis.get(
-                    "decision",
-                    "WATCH"
-                ),
-
-            "narrative_status":
-                analysis.get(
-                    "narrative_status",
-                    "stable"
-                ),
-
-            "writing_mode":
-                analysis.get(
-                    "writing_mode",
-                    ""
-                )
-        })
-
-    save_json(
-        SEEN_FILE,
-        list(seen)[-3000:]
+        analysis
     )
 
-    save_json(
-        TOPIC_FILE,
-        topic_history[-500:]
-    )
+    # ========================================================
+    # RUN SUMMARY
+    # ========================================================
 
     print(
-        "\n======================================"
+        "\n=============================================="
     )
 
     print(
@@ -2872,9 +4171,35 @@ def main():
     )
 
     print(
-        "======================================"
+        f"Decision: {decision}"
+    )
+
+    print(
+        f"Confidence: {confidence}/100"
+    )
+
+    print(
+        f"Evidence: {evidence}/10"
+    )
+
+    print(
+        f"KOL opportunity: {kol}/10"
+    )
+
+    print(
+        f"Writing mode: "
+        f"{analysis.get('writing_mode', 'n/a')}"
+    )
+
+    print(
+        "=============================================="
     )
 
 
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
 if __name__ == "__main__":
+
     main()
