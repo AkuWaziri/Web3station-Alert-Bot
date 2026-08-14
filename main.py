@@ -252,30 +252,42 @@ def post(url, **kwargs):
 # ============================================================
 
 def send_telegram(message):
-
     if not TELEGRAM_TOKEN:
-        print("[TELEGRAM] TELEGRAM_TOKEN missing")
+        print("[TELEGRAM ERROR] TELEGRAM_TOKEN is missing")
         return False
 
     if not TELEGRAM_CHAT_ID:
-        print("[TELEGRAM] TELEGRAM_CHAT_ID missing")
+        print("[TELEGRAM ERROR] TELEGRAM_CHAT_ID is missing")
         return False
 
-    url = (
-        "https://api.telegram.org/"
-        f"bot{TELEGRAM_TOKEN}/sendMessage"
-    )
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
 
-    response = post(
-        url,
-        json={
-            "chat_id": TELEGRAM_CHAT_ID,
-            "text": message,
-            "disable_web_page_preview": False
-        }
-    )
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "disable_web_page_preview": False
+    }
 
-    return response is not None
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=30
+        )
+
+        print(f"[TELEGRAM STATUS] {response.status_code}")
+        print(f"[TELEGRAM RESPONSE] {response.text}")
+
+        if response.ok:
+            print("[TELEGRAM] Message sent successfully")
+            return True
+
+        print("[TELEGRAM ERROR] Telegram rejected the message")
+        return False
+
+    except Exception as e:
+        print(f"[TELEGRAM ERROR] {e}")
+        return False
 
 
 # ============================================================
