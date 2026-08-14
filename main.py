@@ -29,12 +29,46 @@ GROQ_MODEL = os.getenv(
     "openai/gpt-oss-120b"
 )
 
-MIN_SIGNAL_SCORE = float(
-    os.getenv("MIN_SIGNAL_SCORE", "6")
+def get_float_env(name, default):
+    value = os.getenv(name)
+
+    if not value or not value.strip():
+        return default
+
+    try:
+        return float(value)
+    except ValueError:
+        print(
+            f"[CONFIG] Invalid {name}='{value}', "
+            f"using default {default}"
+        )
+        return default
+
+
+def get_int_env(name, default):
+    value = os.getenv(name)
+
+    if not value or not value.strip():
+        return default
+
+    try:
+        return int(value)
+    except ValueError:
+        print(
+            f"[CONFIG] Invalid {name}='{value}', "
+            f"using default {default}"
+        )
+        return default
+
+
+MIN_SIGNAL_SCORE = get_float_env(
+    "MIN_SIGNAL_SCORE",
+    6
 )
 
-MAX_ALERTS = int(
-    os.getenv("MAX_ALERTS", "5")
+MAX_ALERTS = get_int_env(
+    "MAX_ALERTS",
+    5
 )
 
 WATCHLIST = [
