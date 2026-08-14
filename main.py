@@ -1,876 +1,1794 @@
-"""
-Crypto/NFT Intelligence Bot
-Collects crypto/NFT/DeFi/AI-crypto signal from free sources, clusters duplicate
-stories, tracks trend velocity across runs, then hands the result to an LLM
-"editor" that aggressively filters down to only genuine content opportunities
-and generates ready-to-post drafts for each.
-
-Runs on a schedule via GitHub Actions (see .github/workflows/alert.yml)
-"""
-
 import os
-import re
 import json
 import time
 import hashlib
+from datetime import datetime, timezone
+from html import unescape
+
 import requests
 import feedparser
-from datetime import datetime, timezone, timedelta
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                  "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-}
 
-# ---------- CONFIG ----------
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-TELEGRAM_CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
-CRYPTOPANIC_KEY = os.environ.get("CRYPTOPANIC_KEY", "")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-NEYNAR_API_KEY = os.environ.get("NEYNAR_API_KEY", "")
-LUNARCRUSH_API_KEY = os.environ.get("LUNARCRUSH_API_KEY", "")
-CMC_API_KEY = os.environ.get("CMC_API_KEY", "")
-ETHERSCAN_API_KEY = os.environ.get("ETHERSCAN_API_KEY", "")
-SOLSCAN_API_KEY = os.environ.get("SOLSCAN_API_KEY", "")
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-# Comma-separated "chainid:contract_address" pairs, e.g. "8453:0xYourBaseToken,1:0xYourEthToken"
-# Base chainid is 8453 under Etherscan API V2's unified chain system. Leave empty to skip.
-TRACKED_EVM_CONTRACTS = [
-    pair.strip() for pair in os.environ.get("TRACKED_EVM_CONTRACTS", "").split(",") if pair.strip()
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+
+CMC_API_KEY = os.getenv("CMC_API_KEY", "")
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY", "")
+NEYNAR_API_KEY = os.getenv("NEYNAR_API_KEY", "")
+SORSA_API_KEY = os.getenv("SORSA_API_KEY", "")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN", "")
+
+GROQ_MODEL = os.getenv(
+    "GROQ_MODEL",
+    "openai/gpt-oss-120b"
+)
+
+MIN_SIGNAL_SCORE = float(
+    os.getenv("MIN_SIGNAL_SCORE", "6")
+)
+
+MAX_ALERTS = int(
+    os.getenv("MAX_ALERTS", "5")
+)
+
+WATCHLIST = [
+    x.strip().upper()
+    for x in os.getenv(
+        "WATCHLIST",
+        "BTC,ETH,SOL,USDC,USDT"
+    ).split(",")
+    if x.strip()
 ]
-# Comma-separated Solana token mint addresses to watch via Solscan. Leave empty to skip.
-TRACKED_SOLANA_TOKENS = [
-    addr.strip() for addr in os.environ.get("TRACKED_SOLANA_TOKENS", "").split(",") if addr.strip()
-]
 
-PROTOCOLS = [p.strip() for p in os.environ.get("PROTOCOLS", "Arc Network,Base").split(",") if p.strip()]
-
-CONTENT_AREAS = [
-    "Crypto", "DeFi", "AI x Crypto", "AI agents", "Stablecoins", "RWA",
-    "Onchain activity", "Wallet infrastructure", "Payments", "Airdrops",
-    "Protocol launches", "Crypto culture", "Emerging narratives", "Crypto memes",
-]
-
-RECENCY_HOURS = 72
 SEEN_FILE = "seen_ids.json"
-TOPIC_HISTORY_FILE = "topic_history.json"
-MAX_CLUSTERS_TO_EDITOR = 60
-CLUSTER_SIMILARITY_THRESHOLD = 0.42  # jaccard on significant words
-HISTORY_RETENTION_DAYS = 14
-COMMUNITY_MIN_SLOTS = 15  # guaranteed minimum Reddit+Farcaster clusters in editor batch
+TOPIC_FILE = "topic_history.json"
 
-# search queries used to pull relevant Farcaster casts -- generic terms plus your protocols
-FARCASTER_QUERIES = ["defi", "airdrop", "stablecoin", "onchain"] + [p.strip() for p in PROTOCOLS]
 
-# LunarCrush per-topic X/social signal -- protocols plus general narrative terms
-LUNARCRUSH_TOPICS = list(PROTOCOLS) + ["defi", "airdrop", "stablecoin", "onchain"]
+# ============================================================
+# YOUR CORE NICHE
+# ============================================================
 
-RSS_FEEDS = {
-    "CoinTelegraph": "https://cointelegraph.com/rss",
-    "CoinDesk": "https://www.coindesk.com/arc/outboundfeeds/rss/",
-    "Decrypt": "https://decrypt.co/feed",
-    "Medium-Crypto": "https://medium.com/feed/tag/cryptocurrency",
-    "Medium-NFT": "https://medium.com/feed/tag/nft",
-    "Reddit-CryptoCurrency": "https://www.reddit.com/r/CryptoCurrency/new/.rss",
-    "Reddit-NFT": "https://www.reddit.com/r/NFT/new/.rss",
-    "Reddit-CryptoMoonShots": "https://www.reddit.com/r/CryptoMoonShots/new/.rss",
-    "Reddit-defi": "https://www.reddit.com/r/defi/new/.rss",
-    # Dedicated Arc Network news feed via Google News search RSS (free, no key required).
-    # Google News RSS re-crawls constantly, so this catches Arc coverage from outlets
-    # that don't have their own RSS feed we can point to directly.
-    "GoogleNews-ArcNetwork": (
-        "https://news.google.com/rss/search?q=%22Arc%20Network%22%20Circle%20blockchain"
-        "%20when:3d&hl=en-US&gl=US&ceid=US:en"
+TOPICS = [
+    "stablecoin",
+    "stablecoins",
+    "payments",
+    "crypto payments",
+    "ai",
+    "ai agent",
+    "ai agents",
+    "agentic",
+    "defi",
+    "rwa",
+    "real world assets",
+    "tokenization",
+    "wallet",
+    "wallets",
+    "financial infrastructure",
+    "onchain finance",
+    "remittance",
+    "usdc",
+    "usdt",
+    "ethereum",
+    "bitcoin",
+    "solana",
+    "base",
+    "arbitrum",
+    "layer 2",
+    "account abstraction",
+    "security",
+    "hack",
+    "exploit",
+    "funding",
+    "mainnet",
+    "launch",
+    "regulation",
+    "institutional",
+    "nft",
+    "digital ownership",
+]
+
+
+# ============================================================
+# RSS SOURCES
+# ============================================================
+
+RSS_FEEDS = [
+    (
+        "CoinDesk",
+        "https://www.coindesk.com/arc/outboundfeeds/rss/"
     ),
-    # Same pattern for Base, since it's your other tracked protocol
-    "GoogleNews-Base": (
-        "https://news.google.com/rss/search?q=%22Base%22%20Coinbase%20blockchain%20L2"
-        "%20when:3d&hl=en-US&gl=US&ceid=US:en"
+    (
+        "Cointelegraph",
+        "https://cointelegraph.com/rss"
     ),
-}
-
-STOPWORDS = {
-    "the", "a", "an", "and", "or", "but", "is", "are", "was", "were", "be",
-    "been", "being", "to", "of", "in", "on", "at", "for", "with", "by",
-    "from", "as", "this", "that", "these", "those", "it", "its", "will",
-    "has", "have", "had", "not", "no", "how", "what", "why", "when", "who",
-    "new", "says", "say", "said", "after", "over", "into", "amid", "amid",
-    "now", "just", "about", "than", "more", "most", "up", "down", "out",
-}
+]
 
 
-# ---------- HELPERS ----------
+# ============================================================
+# HELPERS
+# ============================================================
+
+SESSION = requests.Session()
+
+SESSION.headers.update({
+    "User-Agent": "Web3Station/1.0"
+})
+
+
+def now():
+    return datetime.now(timezone.utc).isoformat()
+
+
+def safe_get(url, **kwargs):
+    try:
+        response = SESSION.get(
+            url,
+            timeout=20,
+            **kwargs
+        )
+
+        if response.status_code == 200:
+            return response
+
+        print(
+            f"[HTTP {response.status_code}] {url}"
+        )
+
+    except Exception as exc:
+        print(
+            f"[REQUEST ERROR] {url}: {exc}"
+        )
+
+    return None
+
+
+def safe_post(url, **kwargs):
+    try:
+        response = SESSION.post(
+            url,
+            timeout=30,
+            **kwargs
+        )
+
+        if response.status_code == 200:
+            return response
+
+        print(
+            f"[POST HTTP {response.status_code}] {url}"
+        )
+
+        print(response.text[:500])
+
+    except Exception as exc:
+        print(
+            f"[POST ERROR] {url}: {exc}"
+        )
+
+    return None
+
+
 def load_json(path, default):
-    if os.path.exists(path):
-        try:
-            with open(path, "r") as f:
-                return json.load(f)
-        except Exception:
-            return default
-    return default
+    try:
+        with open(
+            path,
+            "r",
+            encoding="utf-8"
+        ) as file:
+            return json.load(file)
+
+    except Exception:
+        return default
 
 
 def save_json(path, data):
-    with open(path, "w") as f:
-        json.dump(data, f)
-
-
-def item_id(title, link):
-    return hashlib.sha256((title + link).encode()).hexdigest()[:16]
-
-
-CF_ACCOUNT_ID = os.environ.get("CF_ACCOUNT_ID", "")
-CF_NAMESPACE_ID = os.environ.get("CF_NAMESPACE_ID", "")
-CF_API_TOKEN = os.environ.get("CF_API_TOKEN", "")
-
-
-def push_draft_to_kv(draft_id, draft_dict):
-    if not (CF_ACCOUNT_ID and CF_NAMESPACE_ID and CF_API_TOKEN):
-        return False
-    try:
-        url = (
-            f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT_ID}"
-            f"/storage/kv/namespaces/{CF_NAMESPACE_ID}/values/{draft_id}"
+    with open(
+        path,
+        "w",
+        encoding="utf-8"
+    ) as file:
+        json.dump(
+            data,
+            file,
+            indent=2,
+            ensure_ascii=False
         )
-        r = requests.put(
-            url,
-            headers={"Authorization": f"Bearer {CF_API_TOKEN}"},
-            data=json.dumps(draft_dict),
-            timeout=15,
-        )
-        return r.ok
-    except Exception as e:
-        print(f"Cloudflare KV push failed: {e}")
+
+
+def clean_text(text):
+    if not text:
+        return ""
+
+    text = unescape(str(text))
+
+    return " ".join(
+        text.replace("\n", " ").split()
+    )
+
+
+def make_id(*parts):
+    raw = "|".join(
+        str(part)
+        for part in parts
+        if part is not None
+    )
+
+    return hashlib.sha256(
+        raw.encode("utf-8")
+    ).hexdigest()
+
+
+def contains_topic(text):
+    text = text.lower()
+
+    return [
+        topic
+        for topic in TOPICS
+        if topic.lower() in text
+    ]
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
+
+def telegram(message):
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+        print("[TELEGRAM] Missing credentials")
         return False
 
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/sendMessage"
+    )
 
-def build_inline_keyboard(draft_id):
-    return {
-        "inline_keyboard": [
-            [
-                {"text": "🔄 Rewrite", "callback_data": f"rewrite:{draft_id}"},
-                {"text": "😈 Contrarian", "callback_data": f"contrarian:{draft_id}"},
-            ],
-            [
-                {"text": "😂 Meme", "callback_data": f"meme:{draft_id}"},
-                {"text": "💾 Save", "callback_data": f"save:{draft_id}"},
-            ],
-        ]
-    }
+    response = safe_post(
+        url,
+        json={
+            "chat_id": TELEGRAM_CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": False
+        }
+    )
 
-
-def send_telegram(text, reply_markup=None):
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": False,
-    }
-    if reply_markup:
-        payload["reply_markup"] = json.dumps(reply_markup)
-    r = requests.post(url, data=payload, timeout=15)
-    if not r.ok:
-        print("Telegram send failed:", r.text)
+    return response is not None
 
 
-# ---------- FETCHERS ----------
-def fetch_rss(name, url, cutoff):
-    items = []
+# ============================================================
+# COINMARKETCAP
+# ============================================================
+
+def fetch_coinmarketcap():
+    if not CMC_API_KEY:
+        print("[CMC] API key missing")
+        return []
+
+    url = (
+        "https://pro-api.coinmarketcap.com/"
+        "v1/cryptocurrency/listings/latest"
+    )
+
+    response = safe_get(
+        url,
+        headers={
+            "X-CMC_PRO_API_KEY": CMC_API_KEY
+        },
+        params={
+            "start": 1,
+            "limit": 100,
+            "convert": "USD"
+        }
+    )
+
+    if not response:
+        return []
+
     try:
-        resp = requests.get(url, headers=HEADERS, timeout=15)
-        feed = feedparser.parse(resp.content)
-        for entry in feed.entries:
-            title = entry.get("title", "").strip()
-            link = entry.get("link", "")
-            summary = re.sub("<[^<]+?>", "", entry.get("summary", ""))[:280]
-            published = entry.get("published_parsed") or entry.get("updated_parsed")
-            if not published:
+        payload = response.json()
+
+        results = []
+
+        for coin in payload.get("data", []):
+
+            symbol = coin.get(
+                "symbol",
+                ""
+            ).upper()
+
+            if (
+                symbol not in WATCHLIST
+                and len(results) >= 25
+            ):
                 continue
-            pub_dt = datetime(*published[:6], tzinfo=timezone.utc)
-            if pub_dt < cutoff:
-                continue
-            items.append({
-                "source": name, "title": title, "link": link,
-                "summary": summary, "published": pub_dt,
-            })
-    except Exception as e:
-        print(f"RSS fetch failed for {name}: {e}")
-    return items
 
-
-def fetch_cryptopanic(cutoff):
-    items = []
-    if not CRYPTOPANIC_KEY:
-        return items
-    try:
-        url = f"https://cryptopanic.com/api/v1/posts/?auth_token={CRYPTOPANIC_KEY}&kind=news&public=true"
-        r = requests.get(url, headers=HEADERS, timeout=15)
-        data = r.json()
-        for post in data.get("results", []):
-            pub_dt = datetime.fromisoformat(post["published_at"].replace("Z", "+00:00"))
-            if pub_dt < cutoff:
-                continue
-            items.append({
-                "source": "CryptoPanic", "title": post.get("title", ""),
-                "link": post.get("url", ""), "summary": "", "published": pub_dt,
-            })
-    except Exception as e:
-        print(f"CryptoPanic fetch failed: {e}")
-    return items
-
-
-def fetch_coingecko_trending():
-    items = []
-    try:
-        r = requests.get("https://api.coingecko.com/api/v3/search/trending", headers=HEADERS, timeout=15)
-        data = r.json()
-        now = datetime.now(timezone.utc)
-        for coin in data.get("coins", [])[:7]:
-            c = coin["item"]
-            items.append({
-                "source": "CoinGecko Trending",
-                "title": f"Trending on CoinGecko: {c['name']} ({c['symbol'].upper()}) - rank #{c.get('market_cap_rank', 'N/A')}",
-                "link": f"https://www.coingecko.com/en/coins/{c['id']}",
-                "summary": "", "published": now,
-            })
-    except Exception as e:
-        print(f"CoinGecko fetch failed: {e}")
-    return items
-
-
-def fetch_farcaster(cutoff):
-    items = []
-    if not NEYNAR_API_KEY:
-        return items
-    seen_hashes = set()
-    for query in FARCASTER_QUERIES:
-        try:
-            r = requests.get(
-                "https://api.neynar.com/v2/farcaster/cast/search",
-                headers={"x-api-key": NEYNAR_API_KEY},
-                params={"q": query, "limit": 15},
-                timeout=15,
+            quote = (
+                coin.get("quote", {})
+                .get("USD", {})
             )
-            data = r.json()
-            casts = data.get("result", {}).get("casts", [])
+
+            results.append({
+                "source": "CoinMarketCap",
+                "type": "market",
+                "id": f"cmc:{symbol}",
+                "title": (
+                    f"{symbol} market update"
+                ),
+                "text": (
+                    f"{symbol} price "
+                    f"${quote.get('price', 0):,.4f}; "
+                    f"24h change "
+                    f"{quote.get('percent_change_24h', 0):.2f}%; "
+                    f"24h volume "
+                    f"${quote.get('volume_24h', 0):,.0f}; "
+                    f"market cap "
+                    f"${quote.get('market_cap', 0):,.0f}"
+                ),
+                "url": (
+                    f"https://coinmarketcap.com/"
+                    f"currencies/{coin.get('slug', '')}/"
+                ),
+                "symbol": symbol,
+                "price": quote.get("price"),
+                "change_24h": quote.get(
+                    "percent_change_24h"
+                ),
+                "volume_24h": quote.get(
+                    "volume_24h"
+                )
+            })
+
+        return results
+
+    except Exception as exc:
+        print(f"[CMC PARSE] {exc}")
+        return []
+
+
+# ============================================================
+# COINGECKO
+# ============================================================
+
+def fetch_coingecko():
+    url = (
+        "https://api.coingecko.com/api/v3/"
+        "simple/price"
+    )
+
+    ids = {
+        "BTC": "bitcoin",
+        "ETH": "ethereum",
+        "SOL": "solana",
+        "USDC": "usd-coin",
+        "USDT": "tether"
+    }
+
+    selected = [
+        ids[symbol]
+        for symbol in WATCHLIST
+        if symbol in ids
+    ]
+
+    if not selected:
+        return []
+
+    headers = {}
+
+    if COINGECKO_API_KEY:
+        headers["x-cg-demo-api-key"] = (
+            COINGECKO_API_KEY
+        )
+
+    response = safe_get(
+        url,
+        headers=headers,
+        params={
+            "ids": ",".join(selected),
+            "vs_currencies": "usd",
+            "include_24hr_change": "true",
+            "include_24hr_vol": "true"
+        }
+    )
+
+    if not response:
+        return []
+
+    try:
+        data = response.json()
+
+        results = []
+
+        for symbol, coin_id in ids.items():
+
+            if symbol not in WATCHLIST:
+                continue
+
+            coin = data.get(
+                coin_id,
+                {}
+            )
+
+            results.append({
+                "source": "CoinGecko",
+                "type": "market_validation",
+                "id": f"coingecko:{symbol}",
+                "title": (
+                    f"{symbol} market validation"
+                ),
+                "text": (
+                    f"{symbol} is trading around "
+                    f"${coin.get('usd', 0):,.4f}; "
+                    f"24h change "
+                    f"{coin.get('usd_24h_change', 0):.2f}%"
+                ),
+                "url": (
+                    f"https://www.coingecko.com/"
+                    f"en/coins/{coin_id}"
+                ),
+                "symbol": symbol,
+                "price": coin.get("usd"),
+                "change_24h": coin.get(
+                    "usd_24h_change"
+                )
+            })
+
+        return results
+
+    except Exception as exc:
+        print(f"[COINGECKO PARSE] {exc}")
+        return []
+
+
+# ============================================================
+# RSS / NEWS
+# ============================================================
+
+def fetch_rss():
+    results = []
+
+    for source, url in RSS_FEEDS:
+
+        try:
+            feed = feedparser.parse(url)
+
+            for entry in feed.entries[:20]:
+
+                title = clean_text(
+                    entry.get("title", "")
+                )
+
+                summary = clean_text(
+                    entry.get(
+                        "summary",
+                        entry.get(
+                            "description",
+                            ""
+                        )
+                    )
+                )
+
+                link = entry.get(
+                    "link",
+                    ""
+                )
+
+                if not title or not link:
+                    continue
+
+                text = f"{title} {summary}"
+
+                results.append({
+                    "source": source,
+                    "type": "news",
+                    "id": make_id(
+                        source,
+                        link
+                    ),
+                    "title": title,
+                    "text": text[:3000],
+                    "url": link
+                })
+
+        except Exception as exc:
+            print(
+                f"[RSS ERROR] {source}: {exc}"
+            )
+
+    return results
+
+
+# ============================================================
+# REDDIT
+# ============================================================
+
+REDDIT_SUBREDDITS = [
+    "CryptoCurrency",
+    "ethereum",
+    "defi",
+    "solana",
+    "Bitcoin",
+    "artificial",
+]
+
+
+def fetch_reddit():
+    results = []
+
+    for subreddit in REDDIT_SUBREDDITS:
+
+        url = (
+            f"https://www.reddit.com/"
+            f"r/{subreddit}/new.json"
+        )
+
+        response = safe_get(
+            url,
+            params={
+                "limit": 15,
+                "raw_json": 1
+            }
+        )
+
+        if not response:
+            continue
+
+        try:
+            payload = response.json()
+
+            posts = (
+                payload
+                .get("data", {})
+                .get("children", [])
+            )
+
+            for child in posts:
+
+                data = child.get(
+                    "data",
+                    {}
+                )
+
+                title = clean_text(
+                    data.get(
+                        "title",
+                        ""
+                    )
+                )
+
+                body = clean_text(
+                    data.get(
+                        "selftext",
+                        ""
+                    )
+                )
+
+                permalink = data.get(
+                    "permalink",
+                    ""
+                )
+
+                if not title:
+                    continue
+
+                results.append({
+                    "source": f"Reddit/r/{subreddit}",
+                    "type": "community",
+                    "id": make_id(
+                        "reddit",
+                        subreddit,
+                        data.get("id")
+                    ),
+                    "title": title,
+                    "text": (
+                        f"{title} {body}"
+                    )[:3000],
+                    "url": (
+                        f"https://www.reddit.com"
+                        f"{permalink}"
+                    ),
+                    "score": data.get(
+                        "score",
+                        0
+                    ),
+                    "comments": data.get(
+                        "num_comments",
+                        0
+                    )
+                })
+
+        except Exception as exc:
+            print(
+                f"[REDDIT PARSE] {exc}"
+            )
+
+    return results
+
+
+# ============================================================
+# LUNARCRUSH
+# ============================================================
+
+def fetch_lunarcrush():
+    if not LUNARCRUSH_API_KEY:
+        print("[LUNARCRUSH] API key missing")
+        return []
+
+    url = (
+        "https://lunarcrush.com/"
+        "api4/public/coins/list/v1"
+    )
+
+    response = safe_get(
+        url,
+        headers={
+            "Authorization":
+                f"Bearer {LUNARCRUSH_API_KEY}"
+        },
+        params={
+            "limit": 25
+        }
+    )
+
+    if not response:
+        return []
+
+    try:
+        payload = response.json()
+
+        results = []
+
+        for coin in payload.get(
+            "data",
+            []
+        ):
+
+            symbol = (
+                coin.get(
+                    "symbol",
+                    ""
+                )
+                .upper()
+            )
+
+            if symbol not in WATCHLIST:
+                continue
+
+            results.append({
+                "source": "LunarCrush",
+                "type": "social",
+                "id": f"lunarcrush:{symbol}",
+                "title": (
+                    f"{symbol} social activity"
+                ),
+                "text": json.dumps(
+                    coin,
+                    ensure_ascii=False
+                )[:4000],
+                "url": (
+                    f"https://lunarcrush.com/"
+                ),
+                "symbol": symbol
+            })
+
+        return results
+
+    except Exception as exc:
+        print(
+            f"[LUNARCRUSH PARSE] {exc}"
+        )
+        return []
+
+
+# ============================================================
+# NEYNAR / FARCASTER
+# ============================================================
+
+def fetch_neynar():
+    if not NEYNAR_API_KEY:
+        print("[NEYNAR] API key missing")
+        return []
+
+    queries = [
+        "stablecoin",
+        "crypto payments",
+        "AI agents",
+        "DeFi",
+        "RWA"
+    ]
+
+    results = []
+
+    for query in queries:
+
+        url = (
+            "https://api.neynar.com/v2/"
+            "farcaster/cast/search"
+        )
+
+        response = safe_get(
+            url,
+            headers={
+                "x-api-key":
+                    NEYNAR_API_KEY
+            },
+            params={
+                "q": query,
+                "limit": 10
+            }
+        )
+
+        if not response:
+            continue
+
+        try:
+            payload = response.json()
+
+            casts = payload.get(
+                "result",
+                {}
+            ).get(
+                "casts",
+                []
+            )
+
             for cast in casts:
-                cast_hash = cast.get("hash", "")
-                if not cast_hash or cast_hash in seen_hashes:
-                    continue
-                seen_hashes.add(cast_hash)
-                ts = cast.get("timestamp", "")
-                try:
-                    pub_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                except Exception:
-                    continue
-                if pub_dt < cutoff:
-                    continue
-                text = cast.get("text", "").strip()
+
+                text = clean_text(
+                    cast.get(
+                        "text",
+                        ""
+                    )
+                )
+
                 if not text:
                     continue
-                author = cast.get("author", {}).get("username", "unknown")
-                items.append({
+
+                cast_hash = cast.get(
+                    "hash",
+                    ""
+                )
+
+                results.append({
                     "source": "Farcaster",
-                    "title": text[:200],
-                    "link": f"https://warpcast.com/{author}/{cast_hash[:10]}",
-                    "summary": f"by @{author}",
-                    "published": pub_dt,
+                    "type": "social",
+                    "id": make_id(
+                        "farcaster",
+                        cast_hash
+                    ),
+                    "title": (
+                        f"Farcaster: {query}"
+                    ),
+                    "text": text[:3000],
+                    "url": (
+                        f"https://warpcast.com/"
+                    )
                 })
-        except Exception as e:
-            print(f"Farcaster fetch failed for query '{query}': {e}")
-    return items
 
-
-def fetch_lunarcrush_topic_signal(topic):
-    """Pull per-topic social/X sentiment + volume snapshot from LunarCrush.
-    Silently returns nothing if the topic slug doesn't resolve or the key
-    is missing/rate-limited -- this is a supplementary signal, not a
-    required source, so failures here should never break the run."""
-    items = []
-    if not LUNARCRUSH_API_KEY:
-        return items
-    try:
-        slug = topic.lower().replace(" ", "-")
-        r = requests.get(
-            f"https://lunarcrush.com/api4/public/topic/{slug}/v1",
-            headers={"Authorization": f"Bearer {LUNARCRUSH_API_KEY}"},
-            timeout=15,
-        )
-        if r.status_code != 200:
-            return items
-        data = r.json().get("data", {})
-        if not data:
-            return items
-
-        tweet_sentiment = data.get("types_sentiment", {}).get("tweet")
-        tweet_count = data.get("types_count", {}).get("tweet", 0)
-        interactions = data.get("interactions_24h", 0)
-
-        # skip near-silent topics so quiet runs don't spam the editor with noise
-        if tweet_count < 5 and interactions < 500:
-            return items
-
-        sentiment_str = f", X sentiment {tweet_sentiment}%" if tweet_sentiment is not None else ""
-        items.append({
-            "source": "LunarCrush X Signal",
-            "title": f"X chatter on '{topic}': {tweet_count} posts/24h, "
-                     f"{interactions:,} interactions{sentiment_str}",
-            "link": f"https://lunarcrush.com/topic/{slug}",
-            "summary": f"Social volume snapshot for {topic} across X",
-            "published": datetime.now(timezone.utc),
-        })
-    except Exception as e:
-        print(f"LunarCrush topic fetch failed for '{topic}': {e}")
-    return items
-
-
-def fetch_lunarcrush_topics_signal():
-    items = []
-    for topic in LUNARCRUSH_TOPICS:
-        items.extend(fetch_lunarcrush_topic_signal(topic))
-        time.sleep(0.5)  # be polite to free-tier rate limits
-    return items
-
-
-def fetch_dexscreener_trending():
-    """Free, no key. Boosted/trending token pairs across every chain DexScreener
-    indexes -- the best free source for catching meme coin momentum early."""
-    items = []
-    try:
-        r = requests.get(
-            "https://api.dexscreener.com/token-boosts/top/v1",
-            headers=HEADERS, timeout=15,
-        )
-        data = r.json()
-        now = datetime.now(timezone.utc)
-        entries = data if isinstance(data, list) else data.get("tokens", [])
-        for t in entries[:10]:
-            chain = t.get("chainId", "unknown")
-            addr = t.get("tokenAddress", "")
-            desc = (t.get("description") or "").strip()[:150]
-            items.append({
-                "source": "DexScreener Trending",
-                "title": f"Boosted/trending token on {chain}: {addr[:10]}... "
-                         f"({t.get('amount', 0)} boost units)",
-                "link": t.get("url") or f"https://dexscreener.com/{chain}/{addr}",
-                "summary": desc,
-                "published": now,
-            })
-    except Exception as e:
-        print(f"DexScreener fetch failed: {e}")
-    return items
-
-
-def fetch_defillama_movers():
-    """Free, no key. Flags DeFi protocols with the biggest 24h TVL swings --
-    good early signal for both DeFi and RWA content areas."""
-    items = []
-    try:
-        r = requests.get("https://api.llama.fi/protocols", headers=HEADERS, timeout=20)
-        data = r.json()
-        now = datetime.now(timezone.utc)
-        movers = [p for p in data if p.get("change_1d") is not None and p.get("tvl", 0) > 1_000_000]
-        movers.sort(key=lambda p: abs(p["change_1d"]), reverse=True)
-        for p in movers[:8]:
-            direction = "up" if p["change_1d"] > 0 else "down"
-            items.append({
-                "source": "DeFiLlama Movers",
-                "title": f"{p.get('name')} TVL {direction} {abs(p['change_1d']):.1f}% in 24h "
-                         f"(${p.get('tvl', 0):,.0f} total)",
-                "link": f"https://defillama.com/protocol/{p.get('slug', '')}",
-                "summary": f"Category: {p.get('category', 'N/A')}",
-                "published": now,
-            })
-    except Exception as e:
-        print(f"DeFiLlama fetch failed: {e}")
-    return items
-
-
-def fetch_coinmarketcap_trending():
-    """Needs a free CMC_API_KEY from coinmarketcap.com/api."""
-    items = []
-    if not CMC_API_KEY:
-        return items
-    try:
-        r = requests.get(
-            "https://pro-api.coinmarketcap.com/v1/cryptocurrency/trending/latest",
-            headers={"X-CMC_PRO_API_KEY": CMC_API_KEY, **HEADERS},
-            timeout=15,
-        )
-        data = r.json()
-        now = datetime.now(timezone.utc)
-        for c in data.get("data", [])[:8]:
-            items.append({
-                "source": "CoinMarketCap Trending",
-                "title": f"Trending on CMC: {c.get('name')} ({c.get('symbol')}) "
-                         f"- rank #{c.get('cmc_rank', 'N/A')}",
-                "link": f"https://coinmarketcap.com/currencies/{c.get('slug', '')}/",
-                "summary": "", "published": now,
-            })
-    except Exception as e:
-        print(f"CoinMarketCap fetch failed: {e}")
-    return items
-
-
-def fetch_etherscan_activity(cutoff):
-    """Needs a free ETHERSCAN_API_KEY (etherscan.io/myapikey). Uses API V2's
-    unified chainid param, so this covers Base and any other EVM chain by
-    just changing the chainid in TRACKED_EVM_CONTRACTS. Silently returns
-    nothing until you add contract addresses to watch."""
-    items = []
-    if not ETHERSCAN_API_KEY or not TRACKED_EVM_CONTRACTS:
-        return items
-    for pair in TRACKED_EVM_CONTRACTS:
-        try:
-            chainid, address = pair.split(":", 1)
-        except ValueError:
-            print(f"Skipping malformed TRACKED_EVM_CONTRACTS entry: {pair}")
-            continue
-        try:
-            r = requests.get(
-                "https://api.etherscan.io/v2/api",
-                params={
-                    "chainid": chainid, "module": "account", "action": "tokentx",
-                    "contractaddress": address, "sort": "desc", "offset": 20,
-                    "apikey": ETHERSCAN_API_KEY,
-                },
-                timeout=15,
+        except Exception as exc:
+            print(
+                f"[NEYNAR PARSE] {exc}"
             )
-            data = r.json()
-            for tx in data.get("result", [])[:20]:
-                try:
-                    pub_dt = datetime.fromtimestamp(int(tx["timeStamp"]), tz=timezone.utc)
-                except Exception:
-                    continue
-                if pub_dt < cutoff:
-                    continue
-                decimals = int(tx.get("tokenDecimal", 18) or 18)
-                value = int(tx.get("value", 0)) / (10 ** decimals)
-                if value < 1000:  # skip dust, keep this a "notable activity" feed
-                    continue
-                items.append({
-                    "source": "Etherscan Activity",
-                    "title": f"{value:,.0f} {tx.get('tokenSymbol', '')} transferred on chain {chainid}",
-                    "link": f"https://etherscan.io/tx/{tx.get('hash', '')}",
-                    "summary": f"From {tx.get('from', '')[:10]}... to {tx.get('to', '')[:10]}...",
-                    "published": pub_dt,
-                })
-        except Exception as e:
-            print(f"Etherscan fetch failed for {pair}: {e}")
-    return items
+
+    return results
 
 
-def fetch_solscan_activity(cutoff):
-    """Needs a free-tier SOLSCAN_API_KEY from solscan.io. Silently returns
-    nothing until you add token mints to TRACKED_SOLANA_TOKENS."""
-    items = []
-    if not SOLSCAN_API_KEY or not TRACKED_SOLANA_TOKENS:
-        return items
-    for mint in TRACKED_SOLANA_TOKENS:
-        try:
-            r = requests.get(
-                "https://pro-api.solscan.io/v2.0/token/defi/activities",
-                headers={"token": SOLSCAN_API_KEY},
-                params={"address": mint, "page_size": 20},
-                timeout=15,
-            )
-            data = r.json()
-            for act in data.get("data", [])[:20]:
-                try:
-                    pub_dt = datetime.fromtimestamp(int(act["block_time"]), tz=timezone.utc)
-                except Exception:
-                    continue
-                if pub_dt < cutoff:
-                    continue
-                items.append({
-                    "source": "Solscan Activity",
-                    "title": f"Solana DeFi activity on tracked token: {act.get('activity_type', 'unknown')}",
-                    "link": f"https://solscan.io/tx/{act.get('trans_id', '')}",
-                    "summary": f"Value: {act.get('value', 'N/A')}",
-                    "published": pub_dt,
-                })
-        except Exception as e:
-            print(f"Solscan fetch failed for {mint}: {e}")
-    return items
+# ============================================================
+# SORSA / X
+# ============================================================
 
+def fetch_sorsa():
+    if not SORSA_API_KEY:
+        print("[SORSA] API key missing")
+        return []
 
-# ---------- DEDUP CLUSTERING ----------
-def significant_words(title):
-    words = re.findall(r"[a-zA-Z0-9]+", title.lower())
-    return {w for w in words if len(w) > 3 and w not in STOPWORDS}
+    queries = [
+        "stablecoin payments",
+        "AI agents crypto",
+        "crypto payments",
+        "RWA tokenization",
+        "DeFi"
+    ]
 
+    results = []
 
-def jaccard(a, b):
-    if not a or not b:
-        return 0.0
-    inter = len(a & b)
-    union = len(a | b)
-    return inter / union if union else 0.0
+    for query in queries:
 
+        url = (
+            "https://api.sorsa.io/v3/"
+            "tweets/search"
+        )
 
-def cluster_items(items):
-    """Greedy clustering: group items whose titles share enough significant words."""
-    clusters = []  # each: {"representative": item, "members": [items], "words": set}
-    for it in items:
-        words = significant_words(it["title"])
-        best_cluster = None
-        best_score = 0.0
-        for c in clusters:
-            score = jaccard(words, c["words"])
-            if score > best_score:
-                best_score = score
-                best_cluster = c
-        if best_cluster and best_score >= CLUSTER_SIMILARITY_THRESHOLD:
-            best_cluster["members"].append(it)
-            best_cluster["words"] |= words
-            # keep the most detailed (longest summary) as representative
-            if len(it.get("summary", "")) > len(best_cluster["representative"].get("summary", "")):
-                best_cluster["representative"] = it
-        else:
-            clusters.append({"representative": it, "members": [it], "words": words})
-    return clusters
-
-
-def extract_topic_key(cluster):
-    """A stable-ish key for tracking this topic's mentions over time."""
-    words = sorted(cluster["words"], key=len, reverse=True)[:3]
-    if not words:
-        return "misc"
-    return "-".join(sorted(words))
-
-
-# ---------- TREND VELOCITY ----------
-def prune_history(history, now):
-    cutoff_iso = (now - timedelta(days=HISTORY_RETENTION_DAYS)).isoformat()
-    for key in list(history.keys()):
-        history[key] = [e for e in history[key] if e["ts"] >= cutoff_iso]
-        if not history[key]:
-            del history[key]
-
-
-def compute_trend(topic_key, current_count, history, now):
-    """Compare current cluster size to this topic's recent history to classify trend."""
-    entries = history.get(topic_key, [])
-    day_ago = (now - timedelta(hours=24)).isoformat()
-    prior_entries = [e for e in entries if e["ts"] >= day_ago]
-    prior_total = sum(e["count"] for e in prior_entries)
-    has_history = len(entries) > 0
-
-    if not has_history:
-        status = "EMERGING" if current_count >= 1 else "NEW"
-        pct = None
-    elif prior_total == 0:
-        status = "EMERGING"
-        pct = None
-    else:
-        pct = round(((current_count - prior_total) / prior_total) * 100)
-        if pct >= 80:
-            status = "RISING" if current_count < 4 else "TRENDING"
-        elif pct >= 20:
-            status = "RISING"
-        elif pct > -20:
-            status = "TRENDING" if current_count >= 4 else "STEADY"
-        else:
-            status = "SATURATED" if current_count >= 4 else "DECLINING"
-
-    # record this run's observation
-    history.setdefault(topic_key, []).append({"ts": now.isoformat(), "count": current_count})
-    return status, pct
-
-
-# ---------- LLM EDITOR ----------
-def build_editor_system_prompt():
-    protocols_str = ", ".join(PROTOCOLS)
-    areas_str = ", ".join(CONTENT_AREAS)
-    return f"""You are a sharp, highly selective personal crypto editor. Your job is to look at a
-batch of clustered crypto/NFT/DeFi story clusters -- each already deduplicated across sources, with a
-trend status showing whether it's EMERGING, RISING, TRENDING, STEADY, SATURATED, or DECLINING -- and
-pick out ONLY the ones that represent a genuinely good opportunity for your user to create original
-X (Twitter) content.
-
-USER'S CONTENT FOCUS AREAS: {areas_str}
-PROTOCOLS THE USER ACTIVELY FOLLOWS: {protocols_str}
-
-FILTER AGGRESSIVELY. Most clusters should be REJECTED. Strongly prioritize EMERGING and RISING topics --
-the goal is to catch things BEFORE they're saturated, not to comment on something everyone already covered.
-Be skeptical of SATURATED topics unless you have a genuinely fresh angle nobody else has taken.
-
-Do NOT systematically prefer polished news-outlet articles over Reddit or Farcaster items just because
-they read more professionally. Raw community chatter, memes, and Farcaster casts are often the earliest
-and most interesting signal -- a rough Reddit thread catching a real shift in sentiment, or a Farcaster
-cast about protocol activity, can be a better opportunity than a rewritten press release. Judge every
-item on genuine merit for the user's content goals, not on how polished the source reads.
-
-Only pick clusters that are:
-- important, rapidly trending, surprising, or controversial
-- useful or under-covered
-- relevant to the user's content focus areas above
-- connected to one of the user's followed protocols, OR
-- capable of producing a genuinely original insight or meme
-
-It is completely fine and expected to return an EMPTY list if nothing is worth posting about.
-Do not force protocol connections that aren't real.
-
-For each cluster you select, determine:
-- priority: "BREAKING", "HIGH", or "DAILY"
-- why_now: 1-2 short reasons this deserves attention right now -- reference the trend status/velocity
-  data you were given (e.g. "mentions up 140% in the last 24h across 5 independent sources")
-- protocol_connection: natural connection to a followed protocol if relevant, else null
-- angle: strongest angle (analytical, contrarian, educational, humorous/meme, or "what people are missing")
-- draft_post: ONE ready-to-post X draft. Sound like a real, sharp crypto-native professional with strong
-  opinions: concise, specific, some personality, skepticism where warranted. Make a clear, confident claim
-  or observation -- do NOT default to ending with a question. Don't beg for engagement with "what's your
-  take?" or similar. A question is only acceptable if it's genuinely the sharpest way to make the point.
-  Vary structure: bold claim, specific detail with implication, contrarian statement, or "everyone's
-  saying X, but Y is what matters." NEVER use "this changes everything", "the future is here",
-  "revolutionary" unless truly warranted. No hashtag spam (max 1-2). No corporate tone. Hard limit 280 chars.
-- is_meme: true if primarily a meme/culture opportunity
-
-Respond with ONLY valid JSON, no markdown fences, no commentary:
-{{"opportunities": [
-  {{"priority": "HIGH", "headline": "...", "why_now": "...", "protocol_connection": null,
-    "angle": "contrarian", "draft_post": "...", "is_meme": false, "cluster_index": 3}}
-]}}
-
-cluster_index refers to the numbered cluster in the batch you were given."""
-
-
-def call_groq_editor(clusters_text, num_clusters):
-    if not GROQ_API_KEY or num_clusters == 0:
-        return None
-    try:
-        r = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}"},
-            json={
-                "model": "llama-3.3-70b-versatile",
-                "messages": [
-                    {"role": "system", "content": build_editor_system_prompt()},
-                    {"role": "user", "content": f"Here are {num_clusters} story clusters:\n\n{clusters_text}"},
-                ],
-                "temperature": 0.6,
-                "max_tokens": 3000,
+        response = safe_get(
+            url,
+            headers={
+                "ApiKey": SORSA_API_KEY
             },
-            timeout=45,
+            params={
+                "query": query,
+                "limit": 10
+            }
         )
-        data = r.json()
-        text = data["choices"][0]["message"]["content"].strip()
-        text = re.sub(r"^```(json)?|```$", "", text.strip(), flags=re.MULTILINE).strip()
-        parsed = json.loads(text)
-        return parsed.get("opportunities", [])
-    except Exception as e:
-        print(f"Groq editor call failed: {e}")
+
+        if not response:
+            continue
+
+        try:
+            payload = response.json()
+
+            tweets = payload.get(
+                "data",
+                payload if isinstance(
+                    payload,
+                    list
+                )
+                else []
+            )
+
+            if isinstance(
+                tweets,
+                dict
+            ):
+                tweets = tweets.get(
+                    "tweets",
+                    []
+                )
+
+            for tweet in tweets:
+
+                text = clean_text(
+                    tweet.get(
+                        "text",
+                        tweet.get(
+                            "full_text",
+                            ""
+                        )
+                    )
+                )
+
+                tweet_id = (
+                    tweet.get(
+                        "id",
+                        ""
+                    )
+                )
+
+                if not text:
+                    continue
+
+                results.append({
+                    "source": "Sorsa / X",
+                    "type": "social",
+                    "id": make_id(
+                        "sorsa",
+                        tweet_id,
+                        text
+                    ),
+                    "title": (
+                        f"X discussion: {query}"
+                    ),
+                    "text": text[:3000],
+                    "url": (
+                        f"https://x.com/"
+                    )
+                })
+
+        except Exception as exc:
+            print(
+                f"[SORSA PARSE] {exc}"
+            )
+
+    return results
+
+
+# ============================================================
+# GITHUB
+# ============================================================
+
+GITHUB_SEARCHES = [
+    "stablecoin",
+    "crypto payments",
+    "AI agents crypto",
+    "DeFi",
+    "RWA tokenization",
+]
+
+
+def fetch_github():
+    results = []
+
+    headers = {
+        "Accept":
+            "application/vnd.github+json"
+    }
+
+    if GITHUB_TOKEN:
+        headers["Authorization"] = (
+            f"Bearer {GITHUB_TOKEN}"
+        )
+
+    for query in GITHUB_SEARCHES:
+
+        url = (
+            "https://api.github.com/"
+            "search/repositories"
+        )
+
+        response = safe_get(
+            url,
+            headers=headers,
+            params={
+                "q": query,
+                "sort": "updated",
+                "order": "desc",
+                "per_page": 5
+            }
+        )
+
+        if not response:
+            continue
+
+        try:
+            payload = response.json()
+
+            for repo in payload.get(
+                "items",
+                []
+            ):
+
+                name = repo.get(
+                    "full_name",
+                    ""
+                )
+
+                description = clean_text(
+                    repo.get(
+                        "description",
+                        ""
+                    )
+                )
+
+                updated = repo.get(
+                    "updated_at",
+                    ""
+                )
+
+                results.append({
+                    "source": "GitHub",
+                    "type": "builder",
+                    "id": make_id(
+                        "github",
+                        repo.get(
+                            "id"
+                        ),
+                        updated
+                    ),
+                    "title": (
+                        f"GitHub activity: "
+                        f"{name}"
+                    ),
+                    "text": (
+                        f"{description} "
+                        f"Repository: {name}. "
+                        f"Stars: "
+                        f"{repo.get('stargazers_count', 0)}. "
+                        f"Forks: "
+                        f"{repo.get('forks_count', 0)}. "
+                        f"Updated: {updated}."
+                    ),
+                    "url": repo.get(
+                        "html_url",
+                        ""
+                    )
+                })
+
+        except Exception as exc:
+            print(
+                f"[GITHUB PARSE] {exc}"
+            )
+
+    return results
+
+
+# ============================================================
+# SIGNAL SCORING
+# ============================================================
+
+def score_signal(item):
+    text = (
+        f"{item.get('title', '')} "
+        f"{item.get('text', '')}"
+    ).lower()
+
+    score = 0.0
+
+    matched = contains_topic(text)
+
+    # Core niche relevance
+    score += min(
+        len(matched) * 1.5,
+        7
+    )
+
+    # High-value developments
+    high_value_words = [
+        "launch",
+        "mainnet",
+        "integration",
+        "partnership",
+        "funding",
+        "adoption",
+        "payments",
+        "stablecoin",
+        "institutional",
+        "tokenization",
+        "acquisition",
+        "upgrade",
+        "release"
+    ]
+
+    for word in high_value_words:
+        if word in text:
+            score += 1
+
+    # Risk / breaking events
+    urgent_words = [
+        "hack",
+        "exploit",
+        "attack",
+        "breach",
+        "halt",
+        "shutdown",
+        "lawsuit",
+        "ban",
+        "approval"
+    ]
+
+    for word in urgent_words:
+        if word in text:
+            score += 2.5
+
+    # Market movement
+    change = item.get(
+        "change_24h"
+    )
+
+    if isinstance(
+        change,
+        (int, float)
+    ):
+        if abs(change) >= 10:
+            score += 4
+        elif abs(change) >= 5:
+            score += 2
+
+    # Reddit engagement
+    comments = item.get(
+        "comments",
+        0
+    )
+
+    if isinstance(
+        comments,
+        (int, float)
+    ):
+        if comments >= 100:
+            score += 2
+        elif comments >= 30:
+            score += 1
+
+    return round(
+        min(score, 20),
+        2
+    )
+
+
+# ============================================================
+# DEDUPLICATION
+# ============================================================
+
+def deduplicate(items, seen):
+
+    output = []
+    local = set()
+
+    for item in items:
+
+        item_id = item.get("id")
+
+        if not item_id:
+            continue
+
+        if item_id in seen:
+            continue
+
+        if item_id in local:
+            continue
+
+        local.add(item_id)
+
+        item["matched_topics"] = (
+            contains_topic(
+                f"{item.get('title', '')} "
+                f"{item.get('text', '')}"
+            )
+        )
+
+        item["signal_score"] = (
+            score_signal(item)
+        )
+
+        output.append(item)
+
+    return output
+
+
+# ============================================================
+# GROQ INTELLIGENCE ENGINE
+# ============================================================
+
+def groq_analyze(items, previous_topics):
+
+    if not GROQ_API_KEY:
+        print("[GROQ] API key missing")
         return None
 
+    compact_items = []
 
-# ---------- FORMATTING ----------
-PRIORITY_EMOJI = {"BREAKING": "🔴", "HIGH": "🟠", "DAILY": "🟡"}
-TREND_EMOJI = {
-    "EMERGING": "⚡", "RISING": "📈", "TRENDING": "🔥",
-    "STEADY": "➡️", "SATURATED": "🌊", "DECLINING": "📉", "NEW": "🆕",
+    for index, item in enumerate(
+        items[:12],
+        start=1
+    ):
+
+        compact_items.append({
+            "id": index,
+            "source": item.get(
+                "source"
+            ),
+            "type": item.get(
+                "type"
+            ),
+            "title": item.get(
+                "title"
+            ),
+            "text": item.get(
+                "text"
+            )[:1500],
+            "url": item.get(
+                "url"
+            ),
+            "signal_score": item.get(
+                "signal_score"
+            ),
+            "topics": item.get(
+                "matched_topics",
+                []
+            )
+        })
+
+    system_prompt = """
+You are the senior intelligence editor for a
+crypto creator who wants to become known for
+high-quality analysis around:
+
+crypto
+AI
+stablecoins
+payments
+DeFi
+financial infrastructure
+tokenization
+wallets
+Bitcoin
+Ethereum
+Solana
+NFTs and digital culture
+
+Your job is NOT to manufacture hype.
+
+Find what matters.
+
+Separate:
+- breaking events
+- meaningful developments
+- emerging narratives
+- market noise
+- content opportunities
+
+Then determine the strongest angle.
+
+WRITING RULES:
+
+The creator must have a consistent identity but
+an interchangeable writing mode.
+
+Choose the writing mode based on the story.
+
+Possible modes:
+
+BREAKING:
+short, direct, immediate.
+
+ANALYTICAL:
+data → interpretation → implication.
+
+CONTRARIAN:
+common assumption → challenge → evidence.
+
+EXPLAINER:
+simple explanation without sounding childish.
+
+VISIONARY:
+development → what it could mean for the future.
+
+SKEPTICAL:
+claim → evidence → risks.
+
+CULTURAL:
+internet-native, human, observant, especially
+for NFT/community/culture stories.
+
+TECHNICAL:
+mechanism → architecture → practical implication.
+
+HUMAN:
+personal observation → lesson → conclusion.
+
+Do not use generic phrases such as:
+"the future is here"
+"game changer"
+"revolutionary"
+"this is huge"
+"mass adoption is coming"
+
+Do not copy source wording.
+
+Do not invent facts.
+
+If evidence is weak, say so.
+
+The creator should sound like a knowledgeable
+crypto-native human, not a corporate PR account
+and not an AI content farm.
+
+Return valid JSON only.
+"""
+
+    user_prompt = {
+        "previous_topics": previous_topics[-50:],
+        "signals": compact_items,
+        "task": """
+Analyze these signals.
+
+Return:
+
+{
+  "summary": "...",
+  "important": true/false,
+  "narratives": [],
+  "top_story_ids": [],
+  "why_it_matters": [],
+  "content_opportunities": [],
+  "writing_mode": "...",
+  "confidence": 0-100,
+  "recommended_posts": [
+    {
+      "hook": "...",
+      "angle": "...",
+      "post": "...",
+      "format": "short_post|thread|reply|research_note"
+    }
+  ]
 }
 
+Only recommend content when there is a
+reasonable evidence-based opportunity.
+"""
+    }
 
-def format_opportunity(opp, cluster):
-    emoji = PRIORITY_EMOJI.get(opp.get("priority", "DAILY"), "🟡")
-    meme_tag = "😂 MEME OPPORTUNITY\n" if opp.get("is_meme") else ""
-    trend_status = cluster.get("trend_status", "") if cluster else ""
-    trend_emoji = TREND_EMOJI.get(trend_status, "")
-    source_count = len(cluster["members"]) if cluster else 1
-    rep = cluster["representative"] if cluster else None
+    url = (
+        "https://api.groq.com/openai/v1/chat/completions"
+    )
 
-    lines = [
-        f"{emoji} <b>{opp.get('headline', 'Untitled')}</b>",
-        meme_tag.strip(),
-    ]
-    if trend_status:
-        lines.append(f"{trend_emoji} {trend_status} | {source_count} source(s)")
-    lines.append(f"\n<b>Why now:</b> {opp.get('why_now', '')}")
-    if opp.get("protocol_connection"):
-        lines.append(f"\n<b>Protocol angle:</b> {opp['protocol_connection']}")
-    lines.append(f"\n<b>Angle:</b> {opp.get('angle', '')}")
-    lines.append(f"\n✍️ <b>Draft:</b>\n{opp.get('draft_post', '')}")
-    if rep:
-        lines.append(f"\nSource: {rep['source']} | {rep['link']}")
-    return "\n".join(l for l in lines if l.strip())
+    response = safe_post(
+        url,
+        headers={
+            "Authorization":
+                f"Bearer {GROQ_API_KEY}",
+            "Content-Type":
+                "application/json"
+        },
+        json={
+            "model": GROQ_MODEL,
+            "temperature": 0.7,
+            "response_format": {
+                "type": "json_object"
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": system_prompt
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        user_prompt,
+                        ensure_ascii=False
+                    )
+                }
+            ]
+        }
+    )
+
+    if not response:
+        return None
+
+    try:
+        data = response.json()
+
+        content = (
+            data["choices"][0]
+            ["message"]["content"]
+        )
+
+        return json.loads(content)
+
+    except Exception as exc:
+        print(
+            f"[GROQ PARSE] {exc}"
+        )
+
+    return None
 
 
-# ---------- MAIN ----------
+# ============================================================
+# TELEGRAM FORMAT
+# ============================================================
+
+def format_alert(analysis, items):
+
+    if not analysis:
+        return None
+
+    lines = []
+
+    lines.append(
+        "🧠 <b>WEB3STATION INTELLIGENCE</b>"
+    )
+
+    lines.append("")
+
+    if analysis.get(
+        "summary"
+    ):
+        lines.append(
+            f"<b>{analysis['summary']}</b>"
+        )
+
+    lines.append("")
+
+    confidence = analysis.get(
+        "confidence",
+        0
+    )
+
+    mode = analysis.get(
+        "writing_mode",
+        "analytical"
+    )
+
+    lines.append(
+        f"🎯 confidence: "
+        f"<b>{confidence}%</b>"
+    )
+
+    lines.append(
+        f"✍️ mode: "
+        f"<b>{mode}</b>"
+    )
+
+    narratives = analysis.get(
+        "narratives",
+        []
+    )
+
+    if narratives:
+
+        lines.append("")
+        lines.append(
+            "<b>emerging narratives</b>"
+        )
+
+        for narrative in narratives[:5]:
+            lines.append(
+                f"• {narrative}"
+            )
+
+    why = analysis.get(
+        "why_it_matters",
+        []
+    )
+
+    if why:
+
+        lines.append("")
+        lines.append(
+            "<b>why it matters</b>"
+        )
+
+        for point in why[:4]:
+            lines.append(
+                f"• {point}"
+            )
+
+    opportunities = analysis.get(
+        "content_opportunities",
+        []
+    )
+
+    if opportunities:
+
+        lines.append("")
+        lines.append(
+            "<b>content opportunities</b>"
+        )
+
+        for opportunity in opportunities[:4]:
+            lines.append(
+                f"• {opportunity}"
+            )
+
+    posts = analysis.get(
+        "recommended_posts",
+        []
+    )
+
+    if posts:
+
+        lines.append("")
+        lines.append(
+            "━━━━━━━━━━━━━━━━━━"
+        )
+        lines.append(
+            "<b>CONTENT OPTIONS</b>"
+        )
+
+        for index, post in enumerate(
+            posts[:3],
+            start=1
+        ):
+
+            hook = post.get(
+                "hook",
+                ""
+            )
+
+            angle = post.get(
+                "angle",
+                ""
+            )
+
+            body = post.get(
+                "post",
+                ""
+            )
+
+            fmt = post.get(
+                "format",
+                ""
+            )
+
+            lines.append("")
+            lines.append(
+                f"<b>{index}. {fmt}</b>"
+            )
+
+            if hook:
+                lines.append(
+                    f"hook: {hook}"
+                )
+
+            if angle:
+                lines.append(
+                    f"angle: {angle}"
+                )
+
+            if body:
+                lines.append(
+                    f"\n{body}"
+                )
+
+    # Supporting sources
+    top_ids = set(
+        analysis.get(
+            "top_story_ids",
+            []
+        )
+    )
+
+    relevant = []
+
+    for index, item in enumerate(
+        items[:12],
+        start=1
+    ):
+
+        if (
+            index in top_ids
+            or not top_ids
+        ):
+            relevant.append(item)
+
+    if relevant:
+
+        lines.append("")
+        lines.append(
+            "━━━━━━━━━━━━━━━━━━"
+        )
+        lines.append(
+            "<b>SOURCES</b>"
+        )
+
+        for item in relevant[:5]:
+
+            title = item.get(
+                "title",
+                ""
+            )[:100]
+
+            url = item.get(
+                "url",
+                ""
+            )
+
+            if url:
+                lines.append(
+                    f'• <a href="{url}">'
+                    f'{title}</a>'
+                )
+            else:
+                lines.append(
+                    f"• {title}"
+                )
+
+    return "\n".join(lines)
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
 def main():
-    now = datetime.now(timezone.utc)
-    cutoff = now - timedelta(hours=RECENCY_HOURS)
 
-    seen = load_json(SEEN_FILE, [])
-    seen = set(seen)
-    topic_history = load_json(TOPIC_HISTORY_FILE, {})
+    print(
+        "===================================="
+    )
+
+    print(
+        "WEB3STATION INTELLIGENCE ENGINE"
+    )
+
+    print(
+        f"Started: {now()}"
+    )
+
+    print(
+        "===================================="
+    )
+
+    seen = set(
+        load_json(
+            SEEN_FILE,
+            []
+        )
+    )
+
+    topic_history = load_json(
+        TOPIC_FILE,
+        []
+    )
 
     all_items = []
-    for name, url in RSS_FEEDS.items():
-        fetched = fetch_rss(name, url, cutoff)
-        print(f"{name}: fetched {len(fetched)} items")
-        all_items.extend(fetched)
 
-    cp_items = fetch_cryptopanic(cutoff)
-    print(f"CryptoPanic: fetched {len(cp_items)} items")
-    all_items.extend(cp_items)
+    # --------------------------------------------------------
+    # COLLECT
+    # --------------------------------------------------------
 
-    cg_items = fetch_coingecko_trending()
-    print(f"CoinGecko: fetched {len(cg_items)} items")
-    all_items.extend(cg_items)
+    collectors = [
+        ("CoinMarketCap", fetch_coinmarketcap),
+        ("CoinGecko", fetch_coingecko),
+        ("RSS", fetch_rss),
+        ("Reddit", fetch_reddit),
+        ("LunarCrush", fetch_lunarcrush),
+        ("Neynar", fetch_neynar),
+        ("Sorsa", fetch_sorsa),
+        ("GitHub", fetch_github),
+    ]
 
-    fc_items = fetch_farcaster(cutoff)
-    print(f"Farcaster: fetched {len(fc_items)} items")
-    all_items.extend(fc_items)
+    for name, collector in collectors:
 
-    lc_items = fetch_lunarcrush_topics_signal()
-    print(f"LunarCrush topic signal: fetched {len(lc_items)} items")
-    all_items.extend(lc_items)
-
-    dex_items = fetch_dexscreener_trending()
-    print(f"DexScreener: fetched {len(dex_items)} items")
-    all_items.extend(dex_items)
-
-    dl_items = fetch_defillama_movers()
-    print(f"DeFiLlama: fetched {len(dl_items)} items")
-    all_items.extend(dl_items)
-
-    cmc_items = fetch_coinmarketcap_trending()
-    print(f"CoinMarketCap: fetched {len(cmc_items)} items")
-    all_items.extend(cmc_items)
-
-    es_items = fetch_etherscan_activity(cutoff)
-    print(f"Etherscan: fetched {len(es_items)} items")
-    all_items.extend(es_items)
-
-    sol_items = fetch_solscan_activity(cutoff)
-    print(f"Solscan: fetched {len(sol_items)} items")
-    all_items.extend(sol_items)
-
-    print(f"Total items fetched: {len(all_items)}")
-
-    new_items = []
-    for it in all_items:
-        iid = item_id(it["title"], it["link"])
-        if iid in seen:
-            continue
-        it["id"] = iid
-        new_items.append(it)
-
-    print(f"New (unseen) items: {len(new_items)}")
-
-    if not new_items:
-        print("Nothing new this run.")
-        return
-
-    new_items.sort(key=lambda x: x["published"], reverse=True)
-
-    # ---- cluster duplicate stories ----
-    clusters = cluster_items(new_items)
-    print(f"Clustered {len(new_items)} items into {len(clusters)} story clusters")
-
-    # ---- compute trend velocity per cluster ----
-    for c in clusters:
-        topic_key = extract_topic_key(c)
-        status, pct = compute_trend(topic_key, len(c["members"]), topic_history, now)
-        c["trend_status"] = status
-        c["trend_pct"] = pct
-        c["topic_key"] = topic_key
-
-    prune_history(topic_history, now)
-
-    # sort clusters: EMERGING/RISING/TRENDING first, then by size
-    priority_order = {"EMERGING": 0, "RISING": 1, "TRENDING": 2, "NEW": 3, "STEADY": 4, "SATURATED": 5, "DECLINING": 6}
-    clusters.sort(key=lambda c: (priority_order.get(c["trend_status"], 9), -len(c["members"])))
-
-    # guarantee community-sourced clusters (Reddit, Farcaster) get real representation --
-    # otherwise polished news articles with more duplicate coverage dominate pure trend-sort
-    def is_community(c):
-        return any(m["source"].startswith("Reddit") or m["source"] == "Farcaster" for m in c["members"])
-
-    community_clusters = [c for c in clusters if is_community(c)]
-    other_clusters = [c for c in clusters if not is_community(c)]
-
-    guaranteed_community = community_clusters[:COMMUNITY_MIN_SLOTS]
-    remaining_slots = MAX_CLUSTERS_TO_EDITOR - len(guaranteed_community)
-    remaining_pool = other_clusters + community_clusters[COMMUNITY_MIN_SLOTS:]
-    remaining_pool.sort(key=lambda c: (priority_order.get(c["trend_status"], 9), -len(c["members"])))
-
-    batch = guaranteed_community + remaining_pool[:remaining_slots]
-    batch.sort(key=lambda c: (priority_order.get(c["trend_status"], 9), -len(c["members"])))
-
-    # ---- build editor prompt text ----
-    lines = []
-    for i, c in enumerate(batch):
-        rep = c["representative"]
-        age_hrs = round((now - rep["published"]).total_seconds() / 3600, 1)
-        pct_str = f", {c['trend_pct']:+d}% vs prior 24h" if c["trend_pct"] is not None else ""
-        source_names = ", ".join(sorted({m["source"] for m in c["members"]}))
-        lines.append(
-            f"[{i}] [{c['trend_status']}{pct_str}] ({len(c['members'])} source(s): {source_names}, "
-            f"{age_hrs}h ago) {rep['title']} -- {rep['summary'][:150]}"
+        print(
+            f"\n[COLLECT] {name}"
         )
-    batch_text = "\n".join(lines)
 
-    opportunities = call_groq_editor(batch_text, len(batch))
+        try:
 
-    if opportunities is None:
-        print("Editor call failed -- not sending anything this run.")
-        save_json(TOPIC_HISTORY_FILE, topic_history)
+            items = collector()
+
+            print(
+                f"[COLLECT] {name}: "
+                f"{len(items)} items"
+            )
+
+            all_items.extend(items)
+
+        except Exception as exc:
+
+            print(
+                f"[COLLECT ERROR] "
+                f"{name}: {exc}"
+            )
+
+    print(
+        f"\nTOTAL RAW SIGNALS: "
+        f"{len(all_items)}"
+    )
+
+    # --------------------------------------------------------
+    # DEDUPLICATE + SCORE
+    # --------------------------------------------------------
+
+    candidates = deduplicate(
+        all_items,
+        seen
+    )
+
+    candidates.sort(
+        key=lambda x: x.get(
+            "signal_score",
+            0
+        ),
+        reverse=True
+    )
+
+    print(
+        f"NEW CANDIDATES: "
+        f"{len(candidates)}"
+    )
+
+    # Keep enough context for Groq
+    candidates = candidates[:30]
+
+    strong_candidates = [
+        item
+        for item in candidates
+        if item.get(
+            "signal_score",
+            0
+        ) >= MIN_SIGNAL_SCORE
+    ]
+
+    # --------------------------------------------------------
+    # NO SIGNAL
+    # --------------------------------------------------------
+
+    if not strong_candidates:
+
+        print(
+            "No high-signal story."
+        )
+
+        # Mark a small number of scanned
+        # items so repeated unchanged
+        # sources don't grow forever.
+        for item in candidates[:50]:
+            seen.add(
+                item["id"]
+            )
+
+        save_json(
+            SEEN_FILE,
+            list(seen)[-3000:]
+        )
+
+        telegram(
+            "🛰 <b>Web3Station scan complete</b>\n\n"
+            "No high-signal crypto narrative "
+            "detected in this scan.\n\n"
+            f"Sources scanned: {len(collectors)}\n"
+            f"New signals: {len(candidates)}"
+        )
+
         return
 
-    if not opportunities:
-        print("Editor reviewed the batch and found nothing worth posting about. Staying quiet.")
-        for it in new_items:
-            seen.add(it["id"])
-        save_json(SEEN_FILE, list(seen)[-3000:])
-        save_json(TOPIC_HISTORY_FILE, topic_history)
+    # --------------------------------------------------------
+    # AI ANALYSIS
+    # --------------------------------------------------------
+
+    analysis = groq_analyze(
+        strong_candidates,
+        topic_history
+    )
+
+    if not analysis:
+
+        print(
+            "Groq analysis failed."
+        )
+
+        telegram(
+            "⚠️ <b>Web3Station</b>\n\n"
+            "Signals were collected, but the "
+            "AI analysis layer failed this run.\n"
+            "The bot will retry on the next scan."
+        )
+
         return
 
-    print(f"Editor selected {len(opportunities)} opportunities out of {len(batch)} clusters.")
+    # --------------------------------------------------------
+    # TELEGRAM
+    # --------------------------------------------------------
 
-    daily_batch = []
-    for opp in opportunities:
-        idx = opp.get("cluster_index")
-        cluster = batch[idx] if isinstance(idx, int) and 0 <= idx < len(batch) else None
-        priority = opp.get("priority", "DAILY")
-        if priority in ("BREAKING", "HIGH"):
-            rep = cluster["representative"] if cluster else None
-            trend_status = cluster.get("trend_status", "") if cluster else ""
-            source_count = len(cluster["members"]) if cluster else 1
-            draft_id = hashlib.sha256(
-                (opp.get("headline", "") + str(now)).encode()
-            ).hexdigest()[:12]
-            draft_dict = {
-                "emoji": PRIORITY_EMOJI.get(priority, "🟠"),
-                "headline": opp.get("headline", "Untitled"),
-                "why_now": opp.get("why_now", ""),
-                "protocol_connection": opp.get("protocol_connection"),
-                "angle": opp.get("angle", ""),
-                "draft_post": opp.get("draft_post", ""),
-                "trend_line": f"{TREND_EMOJI.get(trend_status, '')} {trend_status} | {source_count} source(s)" if trend_status else "",
-                "source_name": rep["source"] if rep else "",
-                "source_link": rep["link"] if rep else "",
-            }
-            kv_ok = push_draft_to_kv(draft_id, draft_dict)
-            keyboard = build_inline_keyboard(draft_id) if kv_ok else None
-            send_telegram(format_opportunity(opp, cluster), reply_markup=keyboard)
-            time.sleep(1)
-        else:
-            daily_batch.append((opp, cluster))
+    message = format_alert(
+        analysis,
+        strong_candidates
+    )
 
-    if daily_batch:
-        digest_lines = ["🟡 <b>DAILY OPPORTUNITIES</b>\n"]
-        for opp, cluster in daily_batch:
-            digest_lines.append(format_opportunity(opp, cluster))
-            digest_lines.append("\n---\n")
-        send_telegram("\n".join(digest_lines))
+    if message:
 
-    for it in new_items:
-        seen.add(it["id"])
-    save_json(SEEN_FILE, list(seen)[-3000:])
-    save_json(TOPIC_HISTORY_FILE, topic_history)
-    print(f"Sent {len(opportunities)} opportunities.")
+        # Telegram has a message limit.
+        if len(message) > 3900:
+            message = message[:3900] + "\n\n..."
+
+        telegram(message)
+
+    # --------------------------------------------------------
+    # MEMORY
+    # --------------------------------------------------------
+
+    for item in candidates:
+
+        seen.add(
+            item["id"]
+        )
+
+    narratives = analysis.get(
+        "narratives",
+        []
+    )
+
+    if narratives:
+
+        topic_history.append({
+            "timestamp": now(),
+            "narratives": narratives,
+            "confidence": analysis.get(
+                "confidence",
+                0
+            ),
+            "writing_mode": analysis.get(
+                "writing_mode",
+                ""
+            )
+        })
+
+    save_json(
+        SEEN_FILE,
+        list(seen)[-3000:]
+    )
+
+    save_json(
+        TOPIC_FILE,
+        topic_history[-500:]
+    )
+
+    print(
+        "\nRUN COMPLETE"
+    )
 
 
 if __name__ == "__main__":
