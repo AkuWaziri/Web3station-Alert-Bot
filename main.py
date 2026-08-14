@@ -12,27 +12,26 @@ import feedparser
 # CONFIG
 # ============================================================
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
 
-CMC_API_KEY = os.getenv("CMC_API_KEY", "")
-COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY", "")
-NEYNAR_API_KEY = os.getenv("NEYNAR_API_KEY", "")
-SORSA_API_KEY = os.getenv("SORSA_API_KEY", "")
+CMC_API_KEY = os.getenv("CMC_API_KEY", "").strip()
+COINGECKO_API_KEY = os.getenv("COINGECKO_API_KEY", "").strip()
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+LUNARCRUSH_API_KEY = os.getenv("LUNARCRUSH_API_KEY", "").strip()
+NEYNAR_API_KEY = os.getenv("NEYNAR_API_KEY", "").strip()
+SORSA_API_KEY = os.getenv("SORSA_API_KEY", "").strip()
 
 GROQ_MODEL = os.getenv(
     "GROQ_MODEL",
     "openai/gpt-oss-120b"
-)
+).strip()
 
 SEEN_FILE = "seen_ids.json"
-TOPIC_FILE = "topic_history.json"
 
 
 # ============================================================
-# YOUR CORE CONTENT NICHE
+# TOPICS
 # ============================================================
 
 PRIORITY_TOPICS = [
@@ -41,23 +40,30 @@ PRIORITY_TOPICS = [
     "ai agents",
     "agentic",
     "agentic commerce",
+
     "stablecoin",
     "stablecoins",
-    "payments",
+
     "payment",
+    "payments",
     "crypto payments",
     "onchain payments",
+
     "cross-border",
     "remittance",
+
     "rwa",
     "real world assets",
     "tokenization",
     "tokenisation",
+
     "wallet",
     "wallets",
+
     "financial infrastructure",
     "onchain finance",
     "defi",
+
     "bitcoin",
     "ethereum",
     "solana",
@@ -65,13 +71,18 @@ PRIORITY_TOPICS = [
     "arbitrum",
     "layer 2",
     "l2",
+
     "institutional",
     "regulation",
     "security",
+
     "hack",
     "exploit",
+    "attack",
+
     "nft",
     "nfts",
+
     "crypto",
 ]
 
@@ -107,7 +118,7 @@ REDDIT_SUBREDDITS = [
 
 
 # ============================================================
-# SOCIAL / RESEARCH QUERIES
+# SOCIAL SEARCHES
 # ============================================================
 
 SOCIAL_QUERIES = [
@@ -120,18 +131,31 @@ SOCIAL_QUERIES = [
 
 
 # ============================================================
-# SESSION
+# GITHUB
+# ============================================================
+
+GITHUB_SEARCHES = [
+    "stablecoin payments",
+    "AI agents crypto",
+    "RWA tokenization",
+    "DeFi payments",
+    "crypto wallet AI",
+]
+
+
+# ============================================================
+# HTTP SESSION
 # ============================================================
 
 SESSION = requests.Session()
 
 SESSION.headers.update({
-    "User-Agent": "Web3Station/3.0 crypto intelligence bot"
+    "User-Agent": "Web3Station/4.0"
 })
 
 
 # ============================================================
-# BASIC HELPERS
+# HELPERS
 # ============================================================
 
 def clean_text(value):
@@ -149,9 +173,9 @@ def clean_text(value):
 
 def make_id(*parts):
     raw = "|".join(
-        str(x)
-        for x in parts
-        if x is not None
+        str(part)
+        for part in parts
+        if part is not None
     )
 
     return hashlib.sha256(
@@ -165,83 +189,73 @@ def now():
     ).isoformat()
 
 
-def load_json(filename, default):
+def load_seen():
     try:
         with open(
-            filename,
+            SEEN_FILE,
             "r",
             encoding="utf-8"
-        ) as f:
-            return json.load(f)
+        ) as file:
+            data = json.load(file)
 
-    except Exception:
-        return default
+        if isinstance(data, list):
+            return set(data)
+
+    except Exception as exc:
+        print(f"[SEEN] Could not load file: {exc}")
+
+    return set()
 
 
-def save_json(filename, data):
-    with open(
-        filename,
-        "w",
-        encoding="utf-8"
-    ) as f:
+def save_seen(seen):
+    try:
+        with open(
+            SEEN_FILE,
+            "w",
+            encoding="utf-8"
+        ) as file:
 
-        json.dump(
-            data,
-            f,
-            indent=2,
-            ensure_ascii=False
+            json.dump(
+                list(seen)[-5000:],
+                file,
+                indent=2
+            )
+
+        print(
+            f"[SEEN] Saved {len(seen)} IDs"
+        )
+
+    except Exception as exc:
+        print(
+            f"[SEEN ERROR] {exc}"
         )
 
 
-def get(url, **kwargs):
+def http_get(url, **kwargs):
+
     try:
 
         response = SESSION.get(
             url,
-            timeout=20,
+            timeout=25,
             **kwargs
         )
 
-        if response.status_code == 200:
+        print(
+            f"[GET] {response.status_code} {url}"
+        )
+
+        if response.ok:
             return response
 
         print(
-            f"[HTTP {response.status_code}] {url}"
+            f"[GET ERROR] {response.text[:500]}"
         )
 
     except Exception as exc:
 
         print(
-            f"[REQUEST ERROR] {url}: {exc}"
-        )
-
-    return None
-
-
-def post(url, **kwargs):
-    try:
-
-        response = SESSION.post(
-            url,
-            timeout=30,
-            **kwargs
-        )
-
-        if response.status_code == 200:
-            return response
-
-        print(
-            f"[POST {response.status_code}] {url}"
-        )
-
-        print(
-            response.text[:500]
-        )
-
-    except Exception as exc:
-
-        print(
-            f"[POST ERROR] {url}: {exc}"
+            f"[GET EXCEPTION] {url}: {exc}"
         )
 
     return None
@@ -252,15 +266,32 @@ def post(url, **kwargs):
 # ============================================================
 
 def send_telegram(message):
+
+    print("")
+    print("======================================")
+    print("TELEGRAM DELIVERY")
+    print("======================================")
+
     if not TELEGRAM_TOKEN:
-        print("[TELEGRAM ERROR] TELEGRAM_TOKEN is missing")
+
+        print(
+            "[TELEGRAM ERROR] TELEGRAM_TOKEN is empty"
+        )
+
         return False
 
     if not TELEGRAM_CHAT_ID:
-        print("[TELEGRAM ERROR] TELEGRAM_CHAT_ID is missing")
+
+        print(
+            "[TELEGRAM ERROR] TELEGRAM_CHAT_ID is empty"
+        )
+
         return False
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_TOKEN}/sendMessage"
+    )
 
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
@@ -268,47 +299,72 @@ def send_telegram(message):
         "disable_web_page_preview": False
     }
 
+    print(
+        f"[TELEGRAM] Chat ID: {TELEGRAM_CHAT_ID}"
+    )
+
     try:
+
         response = requests.post(
             url,
             json=payload,
             timeout=30
         )
 
-        print(f"[TELEGRAM STATUS] {response.status_code}")
-        print(f"[TELEGRAM RESPONSE] {response.text}")
+        print(
+            f"[TELEGRAM] HTTP STATUS: "
+            f"{response.status_code}"
+        )
+
+        print(
+            f"[TELEGRAM] RESPONSE: "
+            f"{response.text[:1000]}"
+        )
 
         if response.ok:
-            print("[TELEGRAM] Message sent successfully")
-            return True
 
-        print("[TELEGRAM ERROR] Telegram rejected the message")
+            try:
+
+                data = response.json()
+
+                if data.get("ok") is True:
+
+                    print(
+                        "[TELEGRAM] MESSAGE SENT SUCCESSFULLY"
+                    )
+
+                    return True
+
+                print(
+                    "[TELEGRAM ERROR] Telegram returned ok=false"
+                )
+
+            except Exception:
+
+                print(
+                    "[TELEGRAM ERROR] Could not parse Telegram response"
+                )
+
+            return False
+
+        print(
+            "[TELEGRAM ERROR] Telegram rejected the request"
+        )
+
         return False
 
-    except Exception as e:
-        print(f"[TELEGRAM ERROR] {e}")
+    except Exception as exc:
+
+        print(
+            f"[TELEGRAM EXCEPTION] {exc}"
+        )
+
         return False
 
 
 # ============================================================
 # RELEVANCE
 # ============================================================
-
-def is_relevant(item):
-
-    text = (
-        item.get("title", "")
-        + " "
-        + item.get("text", "")
-    ).lower()
-
-    for topic in PRIORITY_TOPICS:
-
-        if topic in text:
-            return True
-
-    return False
-
 
 def relevance_score(item):
 
@@ -327,23 +383,28 @@ def relevance_score(item):
             if topic in [
                 "stablecoin",
                 "stablecoins",
-                "payments",
                 "payment",
-                "ai agents",
+                "payments",
+                "crypto payments",
+                "onchain payments",
                 "ai agent",
+                "ai agents",
                 "agentic commerce",
                 "rwa",
+                "real world assets",
                 "tokenization",
                 "tokenisation",
                 "financial infrastructure",
                 "onchain finance",
+                "defi",
             ]:
+
                 score += 3
 
             else:
+
                 score += 1
 
-    # Important events
     for word in [
         "launch",
         "mainnet",
@@ -363,9 +424,9 @@ def relevance_score(item):
     ]:
 
         if word in text:
+
             score += 2
 
-    # Reddit engagement
     comments = item.get(
         "comments",
         0
@@ -382,6 +443,11 @@ def relevance_score(item):
     return score
 
 
+def is_relevant(item):
+
+    return relevance_score(item) >= 2
+
+
 # ============================================================
 # COINMARKETCAP
 # ============================================================
@@ -392,17 +458,15 @@ def fetch_coinmarketcap():
 
     if not CMC_API_KEY:
 
-        print("[CMC] API key missing")
+        print(
+            "[CoinMarketCap] API key missing - skipped"
+        )
 
         return results
 
-    url = (
+    response = http_get(
         "https://pro-api.coinmarketcap.com/"
-        "v3/cryptocurrency/listings/latest"
-    )
-
-    response = get(
-        url,
+        "v3/cryptocurrency/listings/latest",
 
         headers={
             "X-CMC_PRO_API_KEY":
@@ -434,6 +498,25 @@ def fetch_coinmarketcap():
                 .get("USD", {})
             )
 
+            change = quote.get(
+                "percent_change_24h",
+                0
+            )
+
+            if not isinstance(
+                change,
+                (int, float)
+            ):
+                continue
+
+            if abs(change) < 5:
+                continue
+
+            name = coin.get(
+                "name",
+                ""
+            )
+
             symbol = coin.get(
                 "symbol",
                 ""
@@ -441,11 +524,6 @@ def fetch_coinmarketcap():
 
             price = quote.get(
                 "price",
-                0
-            )
-
-            change = quote.get(
-                "percent_change_24h",
                 0
             )
 
@@ -459,18 +537,10 @@ def fetch_coinmarketcap():
                 0
             )
 
-            text = (
-                f"{coin.get('name')} "
-                f"({symbol}) price "
-                f"${price:,.6f}; "
-                f"24h change {change:.2f}%; "
-                f"24h volume ${volume:,.0f}; "
-                f"market cap ${market_cap:,.0f}"
+            slug = coin.get(
+                "slug",
+                ""
             )
-
-            # Only send interesting market movements
-            if abs(change) < 5:
-                continue
 
             results.append({
 
@@ -478,19 +548,20 @@ def fetch_coinmarketcap():
                     "CoinMarketCap",
 
                 "title":
-                    f"{coin.get('name')} market movement",
+                    f"{name} market movement",
 
                 "text":
-                    text,
+                    (
+                        f"{name} ({symbol}) "
+                        f"price ${price:,.6f}; "
+                        f"24h change {change:.2f}%; "
+                        f"24h volume ${volume:,.0f}; "
+                        f"market cap ${market_cap:,.0f}"
+                    ),
 
                 "url":
-                    "https://coinmarketcap.com/currencies/"
-                    + str(
-                        coin.get(
-                            "slug",
-                            ""
-                        )
-                    ),
+                    f"https://coinmarketcap.com/"
+                    f"currencies/{slug}",
 
                 "id":
                     make_id(
@@ -504,7 +575,7 @@ def fetch_coinmarketcap():
     except Exception as exc:
 
         print(
-            f"[CMC ERROR] {exc}"
+            f"[CoinMarketCap ERROR] {exc}"
         )
 
     return results
@@ -518,11 +589,6 @@ def fetch_coingecko():
 
     results = []
 
-    url = (
-        "https://api.coingecko.com/api/v3/"
-        "coins/markets"
-    )
-
     headers = {}
 
     if COINGECKO_API_KEY:
@@ -531,8 +597,9 @@ def fetch_coingecko():
             "x-cg-demo-api-key"
         ] = COINGECKO_API_KEY
 
-    response = get(
-        url,
+    response = http_get(
+        "https://api.coingecko.com/api/v3/"
+        "coins/markets",
 
         headers=headers,
 
@@ -567,18 +634,29 @@ def fetch_coingecko():
             if abs(change) < 7:
                 continue
 
+            name = coin.get(
+                "name",
+                ""
+            )
+
+            symbol = str(
+                coin.get(
+                    "symbol",
+                    ""
+                )
+            ).upper()
+
             results.append({
 
                 "source":
                     "CoinGecko",
 
                 "title":
-                    f"{coin.get('name')} market movement",
+                    f"{name} market movement",
 
                 "text":
                     (
-                        f"{coin.get('name')} "
-                        f"({coin.get('symbol', '').upper()}) "
+                        f"{name} ({symbol}) "
                         f"price ${coin.get('current_price', 0):,.6f}; "
                         f"24h change {change:.2f}%; "
                         f"market cap ${coin.get('market_cap', 0):,.0f}; "
@@ -586,8 +664,10 @@ def fetch_coingecko():
                     ),
 
                 "url":
-                    f"https://www.coingecko.com/en/coins/"
-                    f"{coin.get('id', '')}",
+                    (
+                        "https://www.coingecko.com/en/coins/"
+                        f"{coin.get('id', '')}"
+                    ),
 
                 "id":
                     make_id(
@@ -601,14 +681,14 @@ def fetch_coingecko():
     except Exception as exc:
 
         print(
-            f"[COINGECKO ERROR] {exc}"
+            f"[CoinGecko ERROR] {exc}"
         )
 
     return results
 
 
 # ============================================================
-# NEWS RSS
+# RSS NEWS
 # ============================================================
 
 def fetch_news():
@@ -618,7 +698,7 @@ def fetch_news():
     for source, url in RSS_FEEDS:
 
         print(
-            f"[NEWS] checking {source}"
+            f"[NEWS] Checking {source}"
         )
 
         try:
@@ -627,7 +707,7 @@ def fetch_news():
                 url
             )
 
-            for entry in feed.entries[:15]:
+            for entry in feed.entries[:20]:
 
                 title = clean_text(
                     entry.get(
@@ -664,7 +744,7 @@ def fetch_news():
 
                     "text":
                         f"{title}. {summary}"[
-                            :3000
+                            :4000
                         ],
 
                     "url":
@@ -680,7 +760,9 @@ def fetch_news():
 
                 if is_relevant(item):
 
-                    results.append(item)
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
@@ -701,16 +783,16 @@ def fetch_reddit():
 
     for subreddit in REDDIT_SUBREDDITS:
 
-        url = (
-            f"https://www.reddit.com/"
-            f"r/{subreddit}/new.json"
+        print(
+            f"[REDDIT] Checking r/{subreddit}"
         )
 
-        response = get(
-            url,
+        response = http_get(
+            f"https://www.reddit.com/"
+            f"r/{subreddit}/new.json",
 
             params={
-                "limit": 15,
+                "limit": 20,
                 "raw_json": 1
             }
         )
@@ -730,20 +812,20 @@ def fetch_reddit():
 
             for post in posts:
 
-                item_data = post.get(
+                d = post.get(
                     "data",
                     {}
                 )
 
                 title = clean_text(
-                    item_data.get(
+                    d.get(
                         "title",
                         ""
                     )
                 )
 
                 body = clean_text(
-                    item_data.get(
+                    d.get(
                         "selftext",
                         ""
                     )
@@ -762,18 +844,20 @@ def fetch_reddit():
 
                     "text":
                         f"{title}. {body}"[
-                            :3000
+                            :4000
                         ],
 
                     "url":
-                        "https://www.reddit.com"
-                        + item_data.get(
-                            "permalink",
-                            ""
+                        (
+                            "https://www.reddit.com"
+                            + d.get(
+                                "permalink",
+                                ""
+                            )
                         ),
 
                     "comments":
-                        item_data.get(
+                        d.get(
                             "num_comments",
                             0
                         ),
@@ -782,14 +866,16 @@ def fetch_reddit():
                         make_id(
                             "reddit",
                             subreddit,
-                            item_data.get("id")
+                            d.get("id")
                         )
 
                 }
 
                 if is_relevant(item):
 
-                    results.append(item)
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
@@ -812,19 +898,15 @@ def fetch_lunarcrush():
     if not LUNARCRUSH_API_KEY:
 
         print(
-            "[LUNARCRUSH] API key missing"
+            "[LunarCrush] API key missing - skipped"
         )
 
         return results
 
-    url = (
+    response = http_get(
+
         "https://lunarcrush.com/"
-        "api4/public/coins/list/v1"
-    )
-
-    response = get(
-
-        url,
+        "api4/public/coins/list/v1",
 
         headers={
             "Authorization":
@@ -858,7 +940,12 @@ def fetch_lunarcrush():
             if not symbol:
                 continue
 
-            results.append({
+            text = json.dumps(
+                coin,
+                ensure_ascii=False
+            )
+
+            item = {
 
                 "source":
                     "LunarCrush",
@@ -867,10 +954,7 @@ def fetch_lunarcrush():
                     f"{symbol} social activity",
 
                 "text":
-                    json.dumps(
-                        coin,
-                        ensure_ascii=False
-                    )[:3000],
+                    text[:4000],
 
                 "url":
                     "https://lunarcrush.com/",
@@ -879,13 +963,14 @@ def fetch_lunarcrush():
                     make_id(
                         "lunarcrush",
                         symbol,
-                        json.dumps(
-                            coin,
-                            sort_keys=True
-                        )[:500]
+                        text[:500]
                     )
 
-            })
+            }
+
+            results.append(
+                item
+            )
 
     except Exception as exc:
 
@@ -907,21 +992,17 @@ def fetch_neynar():
     if not NEYNAR_API_KEY:
 
         print(
-            "[NEYNAR] API key missing"
+            "[Neynar] API key missing - skipped"
         )
 
         return results
 
     for query in SOCIAL_QUERIES:
 
-        url = (
+        response = http_get(
+
             "https://api.neynar.com/v2/"
-            "farcaster/cast/search/"
-        )
-
-        response = get(
-
-            url,
+            "farcaster/cast/search/",
 
             headers={
                 "x-api-key":
@@ -967,31 +1048,33 @@ def fetch_neynar():
                 if not text:
                     continue
 
+                if not is_relevant({
+                    "title": query,
+                    "text": text
+                }):
+                    continue
+
+                username = (
+                    cast
+                    .get("author", {})
+                    .get("username", "")
+                )
+
                 item = {
 
                     "source":
                         "Farcaster / Neynar",
 
                     "title":
-                        f"Farcaster discussion: {query}",
+                        f"Farcaster: {query}",
 
                     "text":
-                        text[:3000],
+                        text[:4000],
 
                     "url":
                         (
                             "https://warpcast.com/"
-                            + str(
-                                cast.get(
-                                    "author",
-                                    {}
-                                ).get(
-                                    "username",
-                                    ""
-                                )
-                            )
-                            + "/"
-                            + str(cast_hash)
+                            f"{username}/{cast_hash}"
                         ),
 
                     "id":
@@ -1002,9 +1085,9 @@ def fetch_neynar():
 
                 }
 
-                if is_relevant(item):
-
-                    results.append(item)
+                results.append(
+                    item
+                )
 
         except Exception as exc:
 
@@ -1026,21 +1109,17 @@ def fetch_sorsa():
     if not SORSA_API_KEY:
 
         print(
-            "[SORSA] API key missing"
+            "[Sorsa] API key missing - skipped"
         )
 
         return results
 
     for query in SOCIAL_QUERIES:
 
-        url = (
+        response = http_get(
+
             "https://api.sorsa.io/v3/"
-            "tweets/search"
-        )
-
-        response = get(
-
-            url,
+            "tweets/search",
 
             headers={
                 "ApiKey":
@@ -1098,6 +1177,12 @@ def fetch_sorsa():
                 if not text:
                     continue
 
+                if not is_relevant({
+                    "title": query,
+                    "text": text
+                }):
+                    continue
+
                 item = {
 
                     "source":
@@ -1107,12 +1192,12 @@ def fetch_sorsa():
                         f"X discussion: {query}",
 
                     "text":
-                        text[:3000],
+                        text[:4000],
 
                     "url":
                         (
                             "https://x.com/i/web/status/"
-                            + str(tweet_id)
+                            f"{tweet_id}"
                         ),
 
                     "id":
@@ -1124,9 +1209,9 @@ def fetch_sorsa():
 
                 }
 
-                if is_relevant(item):
-
-                    results.append(item)
+                results.append(
+                    item
+                )
 
         except Exception as exc:
 
@@ -1141,29 +1226,20 @@ def fetch_sorsa():
 # GITHUB
 # ============================================================
 
-GITHUB_SEARCHES = [
-    "stablecoin payments",
-    "AI agents crypto",
-    "RWA tokenization",
-    "DeFi payments",
-    "crypto wallet AI",
-]
-
-
 def fetch_github():
 
     results = []
 
     for query in GITHUB_SEARCHES:
 
-        url = (
-            "https://api.github.com/"
-            "search/repositories"
+        print(
+            f"[GITHUB] Searching: {query}"
         )
 
-        response = get(
+        response = http_get(
 
-            url,
+            "https://api.github.com/"
+            "search/repositories",
 
             headers={
                 "Accept":
@@ -1235,11 +1311,11 @@ def fetch_github():
                     "text":
                         (
                             f"{description}. "
-                            f"Repository {name}. "
+                            f"Repository: {name}. "
                             f"{stars} stars. "
                             f"{forks} forks. "
-                            f"Updated {updated}."
-                        )[:3000],
+                            f"Updated: {updated}."
+                        )[:4000],
 
                     "url":
                         repo.get(
@@ -1258,7 +1334,9 @@ def fetch_github():
 
                 if is_relevant(item):
 
-                    results.append(item)
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
@@ -1270,44 +1348,46 @@ def fetch_github():
 
 
 # ============================================================
-# GROQ EDITOR
+# GROQ
 # ============================================================
 
-def groq_edit(item):
+def groq_analyze(item):
+
+    print("")
+    print("======================================")
+    print("GROQ")
+    print("======================================")
 
     if not GROQ_API_KEY:
 
         print(
-            "[GROQ] API key missing"
+            "[GROQ ERROR] GROQ_API_KEY is missing"
         )
 
         return None
 
+    print(
+        f"[GROQ] Model: {GROQ_MODEL}"
+    )
+
     system_prompt = """
-You are the private senior crypto content editor
-for a serious crypto creator.
+You are the editorial AI for WEB3STATION.
 
-The creator wants to become known for insightful
-content around:
+Turn one crypto/Web3 signal into a concise social-media
+content opportunity.
 
-AI x crypto
-stablecoins
-payments
-financial infrastructure
-RWA
-tokenization
-wallets
-DeFi
-onchain finance
-Bitcoin
-Ethereum
-Solana
-NFTs and emerging crypto technology.
+Return EXACTLY:
 
-Your job is NOT to sound like a news reporter.
+CATEGORY:
+short category
 
-Turn the supplied signal into a useful social-media
-content idea.
+ANGLE:
+one or two concise sentences explaining the interesting
+content angle.
+
+DRAFT:
+a natural social-media post based ONLY on the supplied
+information.
 
 RULES:
 
@@ -1315,298 +1395,263 @@ RULES:
 - Never invent numbers.
 - Never invent partnerships.
 - Never invent quotes.
-- Never claim something happened unless the source says it happened.
-- If the source is weak, say so through the angle.
-- Do not force bullish sentiment.
-- Do not use corporate PR language.
-- Do not use "game changer".
-- Do not use "revolutionary".
-- Do not use "the future is here".
-- Do not use "this is huge".
-- Do not use "mass adoption is coming".
-- Avoid unnecessary hashtags.
-- Avoid excessive emojis.
-- Write naturally.
-- Be crypto-native.
-- Be sharp.
-- Be concise.
-- Make the angle more interesting than simply repeating the headline.
-- The writing style must adapt to the subject.
+- Never invent events.
+- Do not exaggerate.
+- Do not use fake certainty.
+- Do not write a news article.
+- Do not add confidence scores.
+- Do not add evidence scores.
+- Do not add narratives.
+- Do not add "what we know".
+- Do not add "what we're inferring".
+- Do not add "what could happen next".
+- Do not add hashtags unless they naturally belong.
+- Keep the draft concise.
+- Make the angle more interesting than simply repeating
+  the headline.
+- If the signal is weak, make the angle cautious.
+- If it is developer activity, focus on what builders
+  are building.
+- If it is payments, focus on infrastructure and utility.
+- If it is AI, focus on the AI x crypto connection.
+- If it is DeFi, focus on mechanism, adoption or risk.
+- If it is regulation, focus on the practical implication.
+- If it is security, remain factual and serious.
+- If it is a community discussion, preserve the uncertainty.
 
-Examples:
-
-Breaking news:
-direct and factual.
-
-AI:
-forward-looking and thoughtful.
-
-Payments:
-infrastructure and real-world utility.
-
-DeFi:
-analytical and risk-aware.
-
-NFT:
-cultural and market-aware.
-
-Security:
-serious and factual.
-
-Developer activity:
-builder-focused.
-
-Community discussion:
-conversational or skeptical when justified.
-
-Return EXACTLY this format:
-
-CATEGORY:
-one short category
-
-ANGLE:
-one or two sentences explaining the interesting angle
-
-DRAFT:
-the actual social-media post
-
-Do not add anything before CATEGORY.
-Do not add anything after the DRAFT.
+Do not write anything outside CATEGORY, ANGLE and DRAFT.
 """
 
     user_prompt = f"""
 SOURCE:
-{item.get('source')}
+{item.get("source", "")}
 
 TITLE:
-{item.get('title')}
+{item.get("title", "")}
 
-INFORMATION:
-{item.get('text', '')[:3500]}
+SIGNAL:
+{item.get("text", "")[:4000]}
 
 SOURCE URL:
-{item.get('url')}
+{item.get("url", "")}
 """
 
-    response = post(
-
+    url = (
         "https://api.groq.com/openai/v1/"
-        "chat/completions",
-
-        headers={
-            "Authorization":
-                f"Bearer {GROQ_API_KEY}",
-
-            "Content-Type":
-                "application/json"
-        },
-
-        json={
-            "model":
-                GROQ_MODEL,
-
-            "temperature":
-                0.65,
-
-            "max_tokens":
-                700,
-
-            "messages": [
-
-                {
-                    "role":
-                        "system",
-
-                    "content":
-                        system_prompt
-                },
-
-                {
-                    "role":
-                        "user",
-
-                    "content":
-                        user_prompt
-                }
-
-            ]
-        }
+        "chat/completions"
     )
 
-    if not response:
-
-        return None
+    payload = {
+        "model": GROQ_MODEL,
+        "temperature": 0.6,
+        "max_tokens": 600,
+        "messages": [
+            {
+                "role": "system",
+                "content": system_prompt
+            },
+            {
+                "role": "user",
+                "content": user_prompt
+            }
+        ]
+    }
 
     try:
 
+        response = requests.post(
+
+            url,
+
+            headers={
+                "Authorization":
+                    f"Bearer {GROQ_API_KEY}",
+
+                "Content-Type":
+                    "application/json"
+            },
+
+            json=payload,
+
+            timeout=60
+        )
+
+        print(
+            f"[GROQ] HTTP STATUS: "
+            f"{response.status_code}"
+        )
+
+        print(
+            f"[GROQ] RESPONSE: "
+            f"{response.text[:1500]}"
+        )
+
+        if not response.ok:
+
+            print(
+                "[GROQ ERROR] API request failed"
+            )
+
+            return None
+
         data = response.json()
 
+        choices = data.get(
+            "choices",
+            []
+        )
+
+        if not choices:
+
+            print(
+                "[GROQ ERROR] No choices returned"
+            )
+
+            return None
+
         content = (
-            data
-            .get("choices", [{}])[0]
+            choices[0]
             .get("message", {})
             .get("content", "")
         )
 
         if not content:
 
+            print(
+                "[GROQ ERROR] Empty content returned"
+            )
+
             return None
 
-        return parse_groq_output(
+        print(
+            "[GROQ] Editorial response received"
+        )
+
+        return parse_groq(
             content
         )
 
     except Exception as exc:
 
         print(
-            f"[GROQ ERROR] {exc}"
+            f"[GROQ EXCEPTION] {exc}"
         )
 
         return None
 
 
 # ============================================================
-# GROQ OUTPUT PARSER
+# GROQ PARSER
 # ============================================================
 
-def parse_groq_output(text):
+def parse_groq(text):
 
     text = text.strip()
 
-    category = ""
-    angle = ""
-    draft = ""
-
     upper = text.upper()
 
+    category_marker = "CATEGORY:"
+    angle_marker = "ANGLE:"
+    draft_marker = "DRAFT:"
+
     category_pos = upper.find(
-        "CATEGORY:"
+        category_marker
     )
 
     angle_pos = upper.find(
-        "ANGLE:"
+        angle_marker
     )
 
     draft_pos = upper.find(
-        "DRAFT:"
+        draft_marker
     )
 
     if category_pos == -1:
+        print(
+            "[GROQ PARSE ERROR] CATEGORY missing"
+        )
         return None
 
     if angle_pos == -1:
+        print(
+            "[GROQ PARSE ERROR] ANGLE missing"
+        )
         return None
 
     if draft_pos == -1:
+        print(
+            "[GROQ PARSE ERROR] DRAFT missing"
+        )
         return None
 
     category = text[
-        category_pos + len("CATEGORY:")
-        :angle_pos
+        category_pos + len(category_marker):
+        angle_pos
     ].strip()
 
     angle = text[
-        angle_pos + len("ANGLE:")
-        :draft_pos
+        angle_pos + len(angle_marker):
+        draft_pos
     ].strip()
 
     draft = text[
-        draft_pos + len("DRAFT:")
+        draft_pos + len(draft_marker):
     ].strip()
 
     if not category:
+        print(
+            "[GROQ PARSE ERROR] Empty category"
+        )
         return None
 
     if not angle:
+        print(
+            "[GROQ PARSE ERROR] Empty angle"
+        )
         return None
 
     if not draft:
+        print(
+            "[GROQ PARSE ERROR] Empty draft"
+        )
         return None
 
     return {
-
-        "category":
-            category,
-
-        "angle":
-            angle,
-
-        "draft":
-            draft
-
+        "category": category,
+        "angle": angle,
+        "draft": draft
     }
 
 
 # ============================================================
-# TELEGRAM FORMAT
+# TELEGRAM MESSAGE
 # ============================================================
 
-def format_message(
-    item,
-    editorial
-):
+def build_message(item, editorial):
 
     return (
         "🧠 WEB3STATION\n\n"
 
-        f"SOURCE\n"
-        f"{item.get('source', 'Unknown')}\n\n"
-
         f"CATEGORY\n"
-        f"{editorial.get('category', '')}\n\n"
+        f"{editorial['category']}\n\n"
 
         f"ANGLE\n"
-        f"{editorial.get('angle', '')}\n\n"
+        f"{editorial['angle']}\n\n"
 
         f"DRAFT\n"
-        f"{editorial.get('draft', '')}\n\n"
+        f"{editorial['draft']}\n\n"
 
         f"SOURCE\n"
-        f"{item.get('url', '')}"
+        f"{item['source']}\n"
+        f"{item['url']}"
     )
 
 
 # ============================================================
-# MAIN
+# COLLECT ALL SOURCES
 # ============================================================
 
-def main():
-
-    print(
-        "======================================"
-    )
-
-    print(
-        "WEB3STATION"
-    )
-
-    print(
-        "Simple Crypto Content Radar"
-    )
-
-    print(
-        now()
-    )
-
-    print(
-        "======================================"
-    )
-
-    seen = set(
-        load_json(
-            SEEN_FILE,
-            []
-        )
-    )
-
-    topic_history = load_json(
-        TOPIC_FILE,
-        []
-    )
-
-    # --------------------------------------------------------
-    # COLLECT
-    # --------------------------------------------------------
+def collect_all():
 
     collectors = [
 
@@ -1648,25 +1693,24 @@ def main():
         (
             "GitHub",
             fetch_github
-        )
-
+        ),
     ]
 
     all_items = []
 
     for name, function in collectors:
 
-        print(
-            f"\n[COLLECT] {name}"
-        )
+        print("")
+        print("======================================")
+        print(f"COLLECTING: {name}")
+        print("======================================")
 
         try:
 
             items = function()
 
             print(
-                f"[{name}] "
-                f"{len(items)} signals"
+                f"[{name}] {len(items)} signals"
             )
 
             all_items.extend(
@@ -1679,23 +1723,24 @@ def main():
                 f"[{name} ERROR] {exc}"
             )
 
-    print(
-        f"\nTOTAL SIGNALS: "
-        f"{len(all_items)}"
-    )
+    return all_items
 
-    # --------------------------------------------------------
-    # REMOVE DUPLICATES
-    # --------------------------------------------------------
 
-    unique = []
+# ============================================================
+# SELECT ONE BEST SIGNAL PER SOURCE
+# ============================================================
+
+def select_signals(items, seen):
+
+    available = []
 
     local_ids = set()
 
-    for item in all_items:
+    for item in items:
 
         item_id = item.get(
-            "id"
+            "id",
+            ""
         )
 
         if not item_id:
@@ -1711,125 +1756,236 @@ def main():
             item_id
         )
 
-        item[
-            "_score"
-        ] = relevance_score(
+        item["_score"] = relevance_score(
             item
         )
 
-        unique.append(
+        available.append(
             item
         )
 
-    # --------------------------------------------------------
-    # SORT
-    # --------------------------------------------------------
-
-    unique.sort(
-        key=lambda item:
-            item.get(
-                "_score",
-                0
-            ),
+    # Highest relevance first
+    available.sort(
+        key=lambda x:
+            x.get("_score", 0),
         reverse=True
     )
 
-    print(
-        f"NEW SIGNALS: "
-        f"{len(unique)}"
-    )
-
-    # --------------------------------------------------------
-    # MAX ONE REPORT PER SOURCE
-    # --------------------------------------------------------
-
     selected = []
 
-    source_count = {}
+    source_used = set()
 
-    for item in unique:
+    for item in available:
 
         source = item.get(
             "source",
             "Unknown"
         )
 
-        source_count.setdefault(
-            source,
-            0
-        )
-
-        # Maximum one report from each source
-        if source_count[source] >= 1:
+        # One report per source per run
+        if source in source_used:
             continue
 
-        # Skip weak signals
+        # Weak signals are ignored
         if item.get(
             "_score",
             0
         ) < 2:
-
             continue
 
         selected.append(
             item
         )
 
-        source_count[source] += 1
+        source_used.add(
+            source
+        )
 
+    return selected
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    print("")
+    print("======================================")
+    print("WEB3STATION")
+    print("SIMPLE CONTENT RADAR")
+    print("======================================")
     print(
-        f"SELECTED REPORTS: "
-        f"{len(selected)}"
+        f"Time: {now()}"
     )
 
     # --------------------------------------------------------
-    # PROCESS EACH SOURCE
+    # CHECK TELEGRAM BEFORE DOING ANYTHING
     # --------------------------------------------------------
 
-    successful_ids = []
-
-    for item in selected:
+    if not TELEGRAM_TOKEN:
 
         print(
-            "\n--------------------------------------"
+            "[FATAL] TELEGRAM_TOKEN is missing"
+        )
+
+        return
+
+    if not TELEGRAM_CHAT_ID:
+
+        print(
+            "[FATAL] TELEGRAM_CHAT_ID is missing"
+        )
+
+        return
+
+    if not GROQ_API_KEY:
+
+        print(
+            "[FATAL] GROQ_API_KEY is missing"
+        )
+
+        return
+
+    print(
+        "[CONFIG] Telegram credentials found"
+    )
+
+    print(
+        "[CONFIG] Groq API key found"
+    )
+
+    print(
+        f"[CONFIG] Groq model: {GROQ_MODEL}"
+    )
+
+    # --------------------------------------------------------
+    # LOAD SEEN
+    # --------------------------------------------------------
+
+    seen = load_seen()
+
+    print(
+        f"[SEEN] {len(seen)} previously sent signals"
+    )
+
+    # --------------------------------------------------------
+    # COLLECT
+    # --------------------------------------------------------
+
+    all_items = collect_all()
+
+    print("")
+    print(
+        f"TOTAL COLLECTED: {len(all_items)}"
+    )
+
+    # --------------------------------------------------------
+    # SELECT
+    # --------------------------------------------------------
+
+    selected = select_signals(
+        all_items,
+        seen
+    )
+
+    print(
+        f"SELECTED: {len(selected)}"
+    )
+
+    if not selected:
+
+        print(
+            "No new relevant signals."
         )
 
         print(
-            f"SOURCE: "
-            f"{item.get('source')}"
+            "No Telegram message will be sent."
+        )
+
+        return
+
+    # --------------------------------------------------------
+    # PROCESS
+    # --------------------------------------------------------
+
+    sent_count = 0
+    failed_count = 0
+
+    for index, item in enumerate(
+        selected,
+        start=1
+    ):
+
+        print("")
+        print("======================================")
+        print(
+            f"REPORT {index}/{len(selected)}"
+        )
+        print("======================================")
+
+        print(
+            f"Source: {item.get('source')}"
         )
 
         print(
-            f"TITLE: "
-            f"{item.get('title')}"
+            f"Title: {item.get('title')}"
         )
 
-        editorial = groq_edit(
+        print(
+            f"Score: {item.get('_score', 0)}"
+        )
+
+        # ----------------------------------------------------
+        # GROQ
+        # ----------------------------------------------------
+
+        editorial = groq_analyze(
             item
         )
 
         if not editorial:
 
             print(
-                "[SKIP] Groq editorial failed"
+                "[REPORT FAILED] Groq failed"
             )
 
-            # DO NOT mark as seen.
-            # It will be retried next run.
+            print(
+                "[IMPORTANT] Signal NOT marked as seen"
+            )
+
+            failed_count += 1
 
             continue
 
-        message = format_message(
+        # ----------------------------------------------------
+        # BUILD MESSAGE
+        # ----------------------------------------------------
+
+        message = build_message(
             item,
             editorial
         )
 
-        if len(message) > 3900:
+        # Telegram max message size is 4096 characters.
+        if len(message) > 4000:
 
             message = (
-                message[:3900]
+                message[:3950]
                 + "\n\n[truncated]"
             )
+
+        print("")
+        print(
+            "MESSAGE TO TELEGRAM:"
+        )
+        print("--------------------------------------")
+        print(message)
+        print("--------------------------------------")
+
+        # ----------------------------------------------------
+        # SEND TELEGRAM
+        # ----------------------------------------------------
 
         sent = send_telegram(
             message
@@ -1838,89 +1994,67 @@ def main():
         if sent:
 
             print(
-                "[SENT]"
+                "[SUCCESS] Telegram delivery confirmed"
             )
 
-            successful_ids.append(
+            # ONLY NOW mark as seen
+            seen.add(
                 item["id"]
             )
 
-            topic_history.append({
+            save_seen(
+                seen
+            )
 
-                "timestamp":
-                    now(),
-
-                "source":
-                    item.get(
-                        "source"
-                    ),
-
-                "category":
-                    editorial.get(
-                        "category"
-                    ),
-
-                "title":
-                    item.get(
-                        "title"
-                    )
-
-            })
+            sent_count += 1
 
         else:
 
             print(
-                "[NOT SENT]"
+                "[FAILED] Telegram delivery failed"
             )
 
-    # --------------------------------------------------------
-    # SAVE ONLY SUCCESSFULLY SENT SIGNALS
-    # --------------------------------------------------------
+            print(
+                "[IMPORTANT] Signal NOT marked as seen"
+            )
 
-    for item_id in successful_ids:
-
-        seen.add(
-            item_id
-        )
-
-    save_json(
-        SEEN_FILE,
-        list(seen)[-5000:]
-    )
-
-    save_json(
-        TOPIC_FILE,
-        topic_history[-500:]
-    )
+            failed_count += 1
 
     # --------------------------------------------------------
-    # STATUS
+    # FINAL STATUS
     # --------------------------------------------------------
 
+    print("")
+    print("======================================")
+    print("WEB3STATION RUN COMPLETE")
+    print("======================================")
+
     print(
-        "\n======================================"
+        f"Collected: {len(all_items)}"
     )
 
     print(
-        "RUN COMPLETE"
+        f"Selected: {len(selected)}"
     )
 
     print(
-        f"Signals collected: {len(all_items)}"
+        f"Sent: {sent_count}"
     )
 
     print(
-        f"New signals: {len(unique)}"
+        f"Failed: {failed_count}"
     )
 
     print(
-        f"Reports sent: {len(successful_ids)}"
+        f"Seen IDs: {len(seen)}"
     )
 
-    print(
-        "======================================"
-    )
+    print("======================================")
 
+
+# ============================================================
+# START
+# ============================================================
 
 if __name__ == "__main__":
     main()
