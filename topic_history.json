@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "timestamp": "2026-08-14T17:48:05.109391+00:00",
+    "narratives": [
+      "Base L2 as the new hub for stablecoin payments and AI‑agent infrastructure",
+      "Solana’s performance vs its payment‑rail positioning",
+      "Institutional and regulatory momentum for stablecoins (White House, OpenUSD)",
+      "RWA‑backed tokens targeting high‑value settlement",
+      "Growth of Bitcoin Lightning Network as a complementary payment layer"
+    ],
+    "confidence": 92,
+    "writing_mode": "ANALYTICAL"
+  }
+]
