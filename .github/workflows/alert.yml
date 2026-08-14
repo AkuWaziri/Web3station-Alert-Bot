@@ -1,43 +1,73 @@
-name: Crypto Alert Bot
+name: Web3Station Intelligence Bot
+
 on:
   schedule:
-    # runs every 30 minutes
-    - cron: "0 */2 * * *"
-  workflow_dispatch: {}  # lets you manually trigger a run from the Actions tab
+    # approximately every 30 minutes
+    # offset from the top/bottom of the hour
+    - cron: "7,37 * * * *"
+
+  workflow_dispatch:
+
 permissions:
-  contents: write  # needed so the bot can commit the updated seen_ids.json
+  contents: write
+
 jobs:
   run-bot:
+
     runs-on: ubuntu-latest
+
     steps:
-      - name: Checkout repo
+
+      - name: Checkout repository
         uses: actions/checkout@v4
-      - name: Set up Python
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - name: Install dependencies
-        run: pip install -r requirements.txt
-      - name: Run bot
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Web3Station
         env:
+
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          PROTOCOLS: ${{ secrets.PROTOCOLS }}
-          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
-          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
+
           CMC_API_KEY: ${{ secrets.CMC_API_KEY }}
-          ETHERSCAN_API_KEY: ${{ secrets.ETHERSCAN_API_KEY }}
-          SOLSCAN_API_KEY: ${{ secrets.SOLSCAN_API_KEY }}
-          TRACKED_EVM_CONTRACTS: ${{ secrets.TRACKED_EVM_CONTRACTS }}
-          TRACKED_SOLANA_TOKENS: ${{ secrets.TRACKED_SOLANA_TOKENS }}
-        run: python main.py
-      - name: Commit updated state files
+          COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
+
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          SORSA_API_KEY: ${{ secrets.SORSA_API_KEY }}
+
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          GROQ_MODEL: ${{ vars.GROQ_MODEL }}
+          MIN_SIGNAL_SCORE: ${{ vars.MIN_SIGNAL_SCORE }}
+          MAX_ALERTS: ${{ vars.MAX_ALERTS }}
+          WATCHLIST: ${{ vars.WATCHLIST }}
+
         run: |
-          git config user.name "crypto-alert-bot"
+          python main.py
+
+      - name: Save Web3Station memory
+        run: |
+
+          git config user.name "web3station-bot"
           git config user.email "bot@users.noreply.github.com"
-          git add seen_ids.json topic_history.json || true
-          git diff --staged --quiet || git commit -m "update bot state [skip ci]"
-          git pull --rebase origin main || true
-          git push
+
+          git add seen_ids.json topic_history.json
+
+          if git diff --staged --quiet; then
+            echo "No state changes."
+          else
+            git commit -m "update Web3Station memory [skip ci]"
+            git push
+          fi
