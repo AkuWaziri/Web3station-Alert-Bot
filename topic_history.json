@@ -52,5 +52,29 @@
     "decision": "POST",
     "narrative_status": "emerging",
     "writing_mode": "analytical"
+  },
+  {
+    "timestamp": "2026-08-15T16:53:46.163147+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "Payments & Infrastructure",
+    "title": "Farcaster discussion: crypto payments"
+  },
+  {
+    "timestamp": "2026-08-15T16:53:47.971820+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "Tokenization & Infrastructure",
+    "title": "Farcaster discussion: RWA"
+  },
+  {
+    "timestamp": "2026-08-15T16:53:49.718691+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "Regulation",
+    "title": "Farcaster discussion: crypto payments"
+  },
+  {
+    "timestamp": "2026-08-15T16:54:02.074360+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "**  \nReal‑World Asset (RWA) On‑boarding  \n\n**",
+    "title": "Farcaster discussion: RWA"
   }
 ]
