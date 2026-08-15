@@ -11,26 +11,16 @@ from datetime import datetime, timezone
 # ============================================================
 
 TWITTERAPIS_KEY = os.getenv("TWITTERAPIS_KEY", "")
+SORSA_API_KEY = os.getenv("SORSA_API_KEY", "")
+
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
 GROQ_MODEL = os.getenv(
     "GROQ_MODEL",
     "openai/gpt-oss-120b"
 )
-
-# ------------------------------------------------------------
-# ADD YOUR X ACCOUNTS HERE
-#
-# Do NOT include @
-#
-# Example:
-#
-# TRACKED_X_ACCOUNTS=elonmusk,balajis,base,ethereum
-#
-# You can also put them directly here.
-# ------------------------------------------------------------
 
 TRACKED_X_ACCOUNTS = [
     x.strip().lstrip("@")
@@ -41,26 +31,6 @@ TRACKED_X_ACCOUNTS = [
     if x.strip()
 ]
 
-
-# ------------------------------------------------------------
-# X KEYWORD SEARCHES
-#
-# These are optional.
-#
-# Example GitHub secret:
-#
-# X_SEARCH_QUERIES=
-# stablecoin payments,
-# "AI agents" crypto,
-# tokenization,
-# RWA
-#
-# The watcher will monitor both:
-#
-# 1. specific accounts
-# 2. broader X searches
-# ------------------------------------------------------------
-
 X_SEARCH_QUERIES = [
     x.strip()
     for x in os.getenv(
@@ -69,7 +39,6 @@ X_SEARCH_QUERIES = [
     ).split(",")
     if x.strip()
 ]
-
 
 SEEN_FILE = "x_seen_ids.json"
 
@@ -81,7 +50,7 @@ SEEN_FILE = "x_seen_ids.json"
 SESSION = requests.Session()
 
 SESSION.headers.update({
-    "User-Agent": "Web3Station-X-Watcher/1.0"
+    "User-Agent": "Web3Station-X-Watcher/2.0"
 })
 
 
@@ -118,7 +87,12 @@ def make_id(*parts):
     ).hexdigest()
 
 
+# ============================================================
+# STATE
+# ============================================================
+
 def load_seen():
+
     try:
 
         with open(
@@ -130,31 +104,43 @@ def load_seen():
             data = json.load(f)
 
             if isinstance(data, list):
-                return set(data)
+                return set(
+                    str(x)
+                    for x in data
+                )
 
             if isinstance(data, dict):
+
                 return set(
-                    data.get(
+                    str(x)
+                    for x in data.get(
                         "ids",
                         []
                     )
                 )
 
+    except FileNotFoundError:
+
+        print(
+            "[STATE] no existing state file"
+        )
+
     except Exception as exc:
 
         print(
-            f"[STATE] no existing state: {exc}"
+            f"[STATE ERROR] {exc}"
         )
 
     return set()
 
 
 def save_seen(seen):
+
     try:
 
-        # Keep state reasonably small.
-        # The newest 10000 IDs are enough
-        # to prevent duplicate alerts.
+        # Keep the state manageable.
+        # 10,000 tweet IDs is plenty for
+        # duplicate protection.
 
         ids = list(seen)[-10000:]
 
@@ -182,31 +168,29 @@ def save_seen(seen):
 
 
 # ============================================================
-# TWITTERAPIS REQUEST
+# TWITTERAPIS
 # ============================================================
 
-BASE_URL = (
+TWITTERAPIS_BASE = (
     "https://api.twitterapis.com/twitter"
 )
 
 
-def twitter_get(
+def twitterapis_get(
     endpoint,
-    params=None,
-    retries=4
+    params=None
 ):
 
     if not TWITTERAPIS_KEY:
 
         print(
-            "[TWITTERAPIS ERROR] "
-            "TWITTERAPIS_KEY is missing"
+            "[TWITTERAPIS] key not configured"
         )
 
         return None
 
     url = (
-        BASE_URL
+        TWITTERAPIS_BASE
         + endpoint
     )
 
@@ -215,114 +199,185 @@ def twitter_get(
             f"Bearer {TWITTERAPIS_KEY}"
     }
 
-    for attempt in range(retries):
+    try:
 
-        try:
+        response = SESSION.get(
+            url,
+            headers=headers,
+            params=params or {},
+            timeout=30
+        )
 
-            response = SESSION.get(
-                url,
-                headers=headers,
-                params=params or {},
-                timeout=30
-            )
+        print(
+            f"[TWITTERAPIS] "
+            f"{response.status_code} "
+            f"{endpoint}"
+        )
 
-            print(
-                f"[TWITTERAPIS] "
-                f"{response.status_code} "
-                f"{endpoint}"
-            )
+        if response.status_code == 200:
 
-            if response.status_code == 200:
+            return response.json()
 
-                return response.json()
-
-            if response.status_code == 401:
-
-                print(
-                    "[TWITTERAPIS] "
-                    "Invalid API key"
-                )
-
-                return None
-
-            if response.status_code == 402:
-
-                print(
-                    "[TWITTERAPIS] "
-                    "API credits exhausted"
-                )
-
-                return None
-
-            if response.status_code == 404:
-
-                print(
-                    "[TWITTERAPIS] "
-                    "Account/resource not found"
-                )
-
-                return None
-
-            if response.status_code == 429:
-
-                wait = 10 * (
-                    attempt + 1
-                )
-
-                print(
-                    f"[TWITTERAPIS] "
-                    f"Rate limited. "
-                    f"Waiting {wait}s"
-                )
-
-                time.sleep(wait)
-
-                continue
-
-            if response.status_code >= 500:
-
-                wait = 5 * (
-                    attempt + 1
-                )
-
-                print(
-                    f"[TWITTERAPIS] "
-                    f"Server error. "
-                    f"Waiting {wait}s"
-                )
-
-                time.sleep(wait)
-
-                continue
+        if response.status_code == 401:
 
             print(
-                "[TWITTERAPIS ERROR]"
-            )
-
-            print(
-                response.text[:1000]
+                "[TWITTERAPIS] "
+                "Invalid API key"
             )
 
             return None
 
-        except Exception as exc:
+        if response.status_code == 402:
 
             print(
-                f"[TWITTERAPIS REQUEST ERROR] "
-                f"{exc}"
+                "[TWITTERAPIS] "
+                "API credits exhausted"
             )
 
-            if attempt < retries - 1:
+            return None
 
-                time.sleep(
-                    5 * (attempt + 1)
-                )
+        if response.status_code == 429:
+
+            print(
+                "[TWITTERAPIS] "
+                "Rate limited"
+            )
+
+            return None
+
+        print(
+            response.text[:1000]
+        )
+
+    except Exception as exc:
+
+        print(
+            f"[TWITTERAPIS ERROR] {exc}"
+        )
 
     return None
 
 
 # ============================================================
-# EXTRACT TWEETS
+# SORSA
+# ============================================================
+
+SORSA_SEARCH_URL = (
+    "https://api.sorsa.io/v3/search-tweets"
+)
+
+
+def sorsa_search(
+    query,
+    order="latest"
+):
+
+    if not SORSA_API_KEY:
+
+        print(
+            "[SORSA] key not configured"
+        )
+
+        return []
+
+    print(
+        f"[SORSA SEARCH] {query}"
+    )
+
+    headers = {
+        "ApiKey":
+            SORSA_API_KEY,
+
+        "Content-Type":
+            "application/json"
+    }
+
+    payload = {
+        "query":
+            query,
+
+        "order":
+            order
+    }
+
+    try:
+
+        response = SESSION.post(
+            SORSA_SEARCH_URL,
+            headers=headers,
+            json=payload,
+            timeout=30
+        )
+
+        print(
+            f"[SORSA] "
+            f"{response.status_code}"
+        )
+
+        if response.status_code == 401:
+
+            print(
+                "[SORSA] Invalid API key"
+            )
+
+            return []
+
+        if response.status_code == 402:
+
+            print(
+                "[SORSA] API credits exhausted"
+            )
+
+            return []
+
+        if response.status_code == 429:
+
+            print(
+                "[SORSA] Rate limited"
+            )
+
+            return []
+
+        if not response.ok:
+
+            print(
+                response.text[:1000]
+            )
+
+            return []
+
+        data = response.json()
+
+        tweets = data.get(
+            "tweets",
+            []
+        )
+
+        if not isinstance(
+            tweets,
+            list
+        ):
+
+            return []
+
+        print(
+            f"[SORSA] "
+            f"{len(tweets)} posts"
+        )
+
+        return tweets
+
+    except Exception as exc:
+
+        print(
+            f"[SORSA ERROR] {exc}"
+        )
+
+        return []
+
+
+# ============================================================
+# EXTRACT TWITTERAPIS TWEETS
 # ============================================================
 
 def extract_tweets(data):
@@ -331,15 +386,14 @@ def extract_tweets(data):
         data,
         dict
     ):
+
         return []
 
-    possible_keys = [
+    for key in [
         "tweets",
         "data",
         "results"
-    ]
-
-    for key in possible_keys:
+    ]:
 
         value = data.get(
             key
@@ -356,10 +410,10 @@ def extract_tweets(data):
 
 
 # ============================================================
-# NORMALIZE TWEET
+# NORMALIZE TWITTERAPIS TWEET
 # ============================================================
 
-def normalize_tweet(
+def normalize_twitterapis_tweet(
     tweet,
     fallback_username=""
 ):
@@ -368,6 +422,7 @@ def normalize_tweet(
         tweet,
         dict
     ):
+
         return None
 
     tweet_id = (
@@ -376,6 +431,7 @@ def normalize_tweet(
     )
 
     if not tweet_id:
+
         return None
 
     text = clean_text(
@@ -389,6 +445,7 @@ def normalize_tweet(
     )
 
     if not text:
+
         return None
 
     author = tweet.get(
@@ -400,6 +457,7 @@ def normalize_tweet(
         author,
         dict
     ):
+
         author = {}
 
     username = (
@@ -416,23 +474,29 @@ def normalize_tweet(
         )
     )
 
-    created_at = (
-        tweet.get(
-            "created_at",
-            ""
-        )
+    created_at = tweet.get(
+        "created_at",
+        ""
+    )
+
+    username = str(
+        username or ""
+    ).lstrip("@")
+
+    tweet_id = str(
+        tweet_id
     )
 
     return {
 
         "id":
-            str(tweet_id),
+            tweet_id,
 
         "text":
             text,
 
         "username":
-            str(username or ""),
+            username,
 
         "name":
             str(name or ""),
@@ -441,31 +505,136 @@ def normalize_tweet(
             created_at,
 
         "url":
-            (
-                f"https://x.com/"
-                f"{username}/status/"
-                f"{tweet_id}"
-            ),
+            f"https://x.com/"
+            f"{username}/status/"
+            f"{tweet_id}",
 
-        "raw":
-            tweet
+        "provider":
+            "TwitterAPIs"
 
     }
 
 
 # ============================================================
-# FETCH ACCOUNT TIMELINE
+# NORMALIZE SORSA TWEET
 # ============================================================
 
-def fetch_account_tweets(
+def normalize_sorsa_tweet(
+    tweet
+):
+
+    if not isinstance(
+        tweet,
+        dict
+    ):
+
+        return None
+
+    tweet_id = (
+        tweet.get("id")
+        or tweet.get("tweet_id")
+    )
+
+    if not tweet_id:
+
+        return None
+
+    text = clean_text(
+        tweet.get(
+            "full_text",
+            tweet.get(
+                "text",
+                ""
+            )
+        )
+    )
+
+    if not text:
+
+        return None
+
+    user = tweet.get(
+        "user",
+        {}
+    )
+
+    if not isinstance(
+        user,
+        dict
+    ):
+
+        user = {}
+
+    username = (
+        user.get("username")
+        or tweet.get("username")
+        or ""
+    )
+
+    name = (
+        user.get("display_name")
+        or user.get("name")
+        or tweet.get("name")
+        or username
+    )
+
+    created_at = (
+        tweet.get(
+            "created_at",
+            ""
+        )
+    )
+
+    username = str(
+        username or ""
+    ).lstrip("@")
+
+    tweet_id = str(
+        tweet_id
+    )
+
+    return {
+
+        "id":
+            tweet_id,
+
+        "text":
+            text,
+
+        "username":
+            username,
+
+        "name":
+            str(name or ""),
+
+        "created_at":
+            created_at,
+
+        "url":
+            f"https://x.com/"
+            f"{username}/status/"
+            f"{tweet_id}",
+
+        "provider":
+            "Sorsa"
+
+    }
+
+
+# ============================================================
+# FETCH ACCOUNT FROM TWITTERAPIS
+# ============================================================
+
+def fetch_account_twitterapis(
     username
 ):
 
     print(
-        f"\n[X ACCOUNT] @{username}"
+        f"\n[TWITTERAPIS ACCOUNT] "
+        f"@{username}"
     )
 
-    data = twitter_get(
+    data = twitterapis_get(
         "/user/tweets",
         params={
             "username":
@@ -476,8 +645,8 @@ def fetch_account_tweets(
     if not data:
 
         print(
-            f"[X ACCOUNT] "
-            f"no response for @{username}"
+            "[TWITTERAPIS ACCOUNT] "
+            "no response"
         )
 
         return []
@@ -486,19 +655,15 @@ def fetch_account_tweets(
         data
     )
 
-    print(
-        f"[X ACCOUNT] "
-        f"@{username}: "
-        f"{len(tweets)} posts"
-    )
-
     results = []
 
     for tweet in tweets:
 
-        normalized = normalize_tweet(
-            tweet,
-            username
+        normalized = (
+            normalize_twitterapis_tweet(
+                tweet,
+                username
+            )
         )
 
         if normalized:
@@ -507,22 +672,70 @@ def fetch_account_tweets(
                 normalized
             )
 
+    print(
+        f"[TWITTERAPIS ACCOUNT] "
+        f"{len(results)} posts"
+    )
+
     return results
 
 
 # ============================================================
-# FETCH X SEARCH
+# FETCH ACCOUNT FROM SORSA
 # ============================================================
 
-def fetch_search(
+def fetch_account_sorsa(
+    username
+):
+
+    query = (
+        f"from:{username}"
+    )
+
+    raw_tweets = sorsa_search(
+        query,
+        order="latest"
+    )
+
+    results = []
+
+    for tweet in raw_tweets:
+
+        normalized = (
+            normalize_sorsa_tweet(
+                tweet
+            )
+        )
+
+        if normalized:
+
+            results.append(
+                normalized
+            )
+
+    print(
+        f"[SORSA ACCOUNT] "
+        f"@{username}: "
+        f"{len(results)} posts"
+    )
+
+    return results
+
+
+# ============================================================
+# FETCH SEARCH FROM TWITTERAPIS
+# ============================================================
+
+def fetch_search_twitterapis(
     query
 ):
 
     print(
-        f"\n[X SEARCH] {query}"
+        f"\n[TWITTERAPIS SEARCH] "
+        f"{query}"
     )
 
-    data = twitter_get(
+    data = twitterapis_get(
         "/tweet/advanced_search",
         params={
             "query":
@@ -535,27 +748,20 @@ def fetch_search(
 
     if not data:
 
-        print(
-            "[X SEARCH] no response"
-        )
-
         return []
 
     tweets = extract_tweets(
         data
     )
 
-    print(
-        f"[X SEARCH] "
-        f"{len(tweets)} posts"
-    )
-
     results = []
 
     for tweet in tweets:
 
-        normalized = normalize_tweet(
-            tweet
+        normalized = (
+            normalize_twitterapis_tweet(
+                tweet
+            )
         )
 
         if normalized:
@@ -563,6 +769,48 @@ def fetch_search(
             results.append(
                 normalized
             )
+
+    print(
+        f"[TWITTERAPIS SEARCH] "
+        f"{len(results)} posts"
+    )
+
+    return results
+
+
+# ============================================================
+# FETCH SEARCH FROM SORSA
+# ============================================================
+
+def fetch_search_sorsa(
+    query
+):
+
+    raw_tweets = sorsa_search(
+        query,
+        order="latest"
+    )
+
+    results = []
+
+    for tweet in raw_tweets:
+
+        normalized = (
+            normalize_sorsa_tweet(
+                tweet
+            )
+        )
+
+        if normalized:
+
+            results.append(
+                normalized
+            )
+
+    print(
+        f"[SORSA SEARCH] "
+        f"{len(results)} posts"
+    )
 
     return results
 
@@ -589,38 +837,37 @@ You are the senior editorial writer
 for Web3Station.
 
 You turn fresh X posts into strong,
-human social-media content ideas.
+human social-media content.
 
-The writing must NOT sound like an AI
-news summary.
+The result must sound like a real,
+intelligent crypto writer thinking
+through an idea.
 
-It must sound like an intelligent human
-crypto writer who has a point of view.
+Do NOT sound like:
 
-IMPORTANT:
+- an AI news summary
+- a press release
+- a corporate marketing team
+- a generic crypto influencer
+- a content farm
+- a chatbot
 
-Do not invent facts.
+Do not simply paraphrase the original post.
 
-Do not invent numbers.
+Find the idea underneath it.
 
-Do not invent events.
+The draft should have an actual point.
 
-Do not pretend the writer personally
-experienced something unless the source
-supports it.
+STYLE VARIATION
 
-Do not copy the original post.
+Choose naturally based on the subject.
 
-Do not simply paraphrase it.
-
-Find the interesting idea underneath it.
-
-The draft should sometimes be:
+Possible modes include:
 
 - educational
 - explanatory
 - analytical
-- "my take"
+- my take
 - skeptical
 - conversational
 - observational
@@ -636,50 +883,33 @@ The draft should sometimes be:
 - investor-focused
 - market-focused
 
-Choose the style naturally based on the post.
+Do not announce the mode.
 
-Vary the opening.
+Do not use the same style repeatedly.
 
-Do NOT always begin with:
+Sometimes start directly.
 
-"this is..."
-"the interesting thing..."
-"we are seeing..."
-"the future..."
-"finally..."
+Sometimes start with a question.
 
-Use natural human writing.
+Sometimes start with an observation.
 
-Sometimes use short sentences.
+Sometimes build from a small detail.
 
-Sometimes use longer flowing sentences.
+Sometimes explain the concept from first principles.
 
-Sometimes use a rhetorical question.
+Sometimes make a comparison.
 
 Sometimes use contrast.
 
-Sometimes use an analogy.
-
-Sometimes explain an idea from first principles.
-
-Sometimes make a small observation and build
-from it.
+Sometimes use a short sentence
+followed by a longer thought.
 
 Sometimes use understated humor.
 
-Sometimes use a personal-sounding viewpoint
-such as:
+Sometimes use a literary device when
+it genuinely improves the writing.
 
-"my take:"
-"what stands out to me:"
-"i think the more interesting part is:"
-"the part people may miss:"
-"there's a bigger question here:"
-
-But do NOT use these in every post.
-
-Literary techniques may be used naturally
-when appropriate:
+Useful literary techniques include:
 
 - metaphor
 - analogy
@@ -692,34 +922,86 @@ when appropriate:
 - narrative progression
 - vivid but restrained imagery
 
-Do not overdo them.
+Do not force literary language.
 
-The result should sound like a person
-thinking clearly, not an AI performing
-"human writing."
+The writing should still sound like someone
+who spends time on crypto and technology.
 
-DETAIL:
+PERSONAL VOICE
 
-The draft should be sufficiently developed
-to communicate an actual idea.
+You may sometimes use expressions such as:
+
+"my take:"
+
+"what stands out to me is..."
+
+"the part people may miss is..."
+
+"i think the more interesting question is..."
+
+"there's a bigger story here."
+
+But do NOT use these repeatedly.
+
+If you use "my take", it represents an
+editorial viewpoint, not a claim that the
+writer personally witnessed the event.
+
+FACTUAL RULES
+
+Never invent:
+
+- facts
+- numbers
+- partnerships
+- people
+- quotes
+- funding
+- product features
+- dates
+- technical capabilities
+
+Do not turn speculation into fact.
+
+Do not claim the writer personally
+experienced something unless the source
+supports it.
+
+If something is uncertain, write about
+the uncertainty.
+
+DEPTH
 
 Do not make every draft short.
 
-Some drafts can be concise.
+Some posts should be concise.
 
-Others should develop the thought over
+Some should develop the idea across
 multiple paragraphs.
 
-Vary length naturally.
+Some should teach something.
 
-Do not add hashtags unless they are
-essential.
+Some should explain why a development
+matters.
+
+Some should examine a second-order effect.
+
+Some should challenge the obvious
+interpretation.
+
+Vary the length naturally.
+
+Do not pad the draft.
+
+Do not repeat the same idea.
+
+Do not use unnecessary hashtags.
 
 Do not use excessive emojis.
 
-Do not use corporate PR language.
+Avoid corporate PR language.
 
-Never use:
+Never casually use:
 
 "game changer"
 "revolutionary"
@@ -728,8 +1010,13 @@ Never use:
 "mass adoption is coming"
 "paradigm shift"
 
-unless the phrase is being discussed
-critically.
+unless discussing those phrases critically.
+
+The final draft should be useful enough
+that a crypto reader would want to stop
+and read it.
+
+OUTPUT
 
 Return EXACTLY:
 
@@ -737,8 +1024,8 @@ CATEGORY:
 one concise category
 
 ANGLE:
-one or two sentences explaining the
-interesting editorial angle
+one or two sentences describing
+the editorial angle
 
 DRAFT:
 the complete social-media draft
@@ -760,6 +1047,9 @@ ORIGINAL POST:
 
 POST DATE:
 {tweet.get('created_at', '')}
+
+PROVIDER:
+{tweet.get('provider', '')}
 
 SOURCE:
 {tweet.get('url', '')}
@@ -808,7 +1098,6 @@ SOURCE:
             }
 
         ]
-
     }
 
     try:
@@ -817,7 +1106,7 @@ SOURCE:
             url,
             headers=headers,
             json=payload,
-            timeout=60
+            timeout=90
         )
 
         print(
@@ -835,20 +1124,23 @@ SOURCE:
 
         data = response.json()
 
+        choices = data.get(
+            "choices",
+            []
+        )
+
+        if not choices:
+
+            print(
+                "[GROQ] no choices"
+            )
+
+            return None
+
         content = (
-            data
-            .get(
-                "choices",
-                [{}]
-            )[0]
-            .get(
-                "message",
-                {}
-            )
-            .get(
-                "content",
-                ""
-            )
+            choices[0]
+            .get("message", {})
+            .get("content", "")
         )
 
         if not content:
@@ -884,17 +1176,9 @@ def parse_groq(
 
     upper = text.upper()
 
-    category_marker = (
-        "CATEGORY:"
-    )
-
-    angle_marker = (
-        "ANGLE:"
-    )
-
-    draft_marker = (
-        "DRAFT:"
-    )
+    category_marker = "CATEGORY:"
+    angle_marker = "ANGLE:"
+    draft_marker = "DRAFT:"
 
     category_pos = upper.find(
         category_marker
@@ -1045,7 +1329,7 @@ def send_telegram(
 
 
 # ============================================================
-# FORMAT TELEGRAM
+# TELEGRAM FORMAT
 # ============================================================
 
 def format_message(
@@ -1092,21 +1376,61 @@ def main():
         "======================================"
     )
 
-    if not TWITTERAPIS_KEY:
+    # --------------------------------------------------------
+    # PROVIDER STATUS
+    # --------------------------------------------------------
+
+    print(
+        "\nPROVIDERS"
+    )
+
+    print(
+        f"TwitterAPIs: "
+        f"{'configured' if TWITTERAPIS_KEY else 'not configured'}"
+    )
+
+    print(
+        f"Sorsa: "
+        f"{'configured' if SORSA_API_KEY else 'not configured'}"
+    )
+
+    print(
+        f"Groq: "
+        f"{'configured' if GROQ_API_KEY else 'not configured'}"
+    )
+
+    print(
+        f"Telegram: "
+        f"{'configured' if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID else 'not configured'}"
+    )
+
+    # At least one X provider must exist.
+
+    if (
+        not TWITTERAPIS_KEY
+        and not SORSA_API_KEY
+    ):
 
         print(
             "ERROR: "
-            "TWITTERAPIS_KEY is not configured."
+            "No X provider API key configured."
         )
 
         return
 
-    if not TRACKED_X_ACCOUNTS:
+    # --------------------------------------------------------
+    # INPUT STATUS
+    # --------------------------------------------------------
 
-        print(
-            "WARNING: "
-            "TRACKED_X_ACCOUNTS is empty."
-        )
+    print(
+        f"\nTRACKED ACCOUNTS: "
+        f"{len(TRACKED_X_ACCOUNTS)}"
+    )
+
+    print(
+        f"SEARCH QUERIES: "
+        f"{len(X_SEARCH_QUERIES)}"
+    )
 
     seen = load_seen()
 
@@ -1117,55 +1441,135 @@ def main():
 
     all_tweets = []
 
-    # --------------------------------------------------------
+    # ========================================================
     # TRACKED ACCOUNTS
-    # --------------------------------------------------------
+    # ========================================================
 
     for username in TRACKED_X_ACCOUNTS:
 
-        tweets = fetch_account_tweets(
-            username
+        print(
+            "\n======================================"
         )
 
-        all_tweets.extend(
-            tweets
+        print(
+            f"ACCOUNT: @{username}"
         )
 
-    # --------------------------------------------------------
-    # KEYWORD SEARCH
-    # --------------------------------------------------------
+        # TwitterAPIs
+
+        if TWITTERAPIS_KEY:
+
+            tweets = (
+                fetch_account_twitterapis(
+                    username
+                )
+            )
+
+            all_tweets.extend(
+                tweets
+            )
+
+        # Sorsa
+
+        if SORSA_API_KEY:
+
+            tweets = (
+                fetch_account_sorsa(
+                    username
+                )
+            )
+
+            all_tweets.extend(
+                tweets
+            )
+
+    # ========================================================
+    # SEARCH QUERIES
+    # ========================================================
 
     for query in X_SEARCH_QUERIES:
 
-        tweets = fetch_search(
-            query
+        print(
+            "\n======================================"
         )
 
-        all_tweets.extend(
-            tweets
+        print(
+            f"SEARCH: {query}"
         )
+
+        # TwitterAPIs
+
+        if TWITTERAPIS_KEY:
+
+            tweets = (
+                fetch_search_twitterapis(
+                    query
+                )
+            )
+
+            all_tweets.extend(
+                tweets
+            )
+
+        # Sorsa
+
+        if SORSA_API_KEY:
+
+            tweets = (
+                fetch_search_sorsa(
+                    query
+                )
+            )
+
+            all_tweets.extend(
+                tweets
+            )
+
+    # ========================================================
+    # TOTAL
+    # ========================================================
 
     print(
-        f"\nTOTAL X POSTS FOUND: "
+        "\n======================================"
+    )
+
+    print(
+        f"TOTAL POSTS FOUND: "
         f"{len(all_tweets)}"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # DEDUPLICATE
-    # --------------------------------------------------------
+    # ========================================================
 
     unique = {}
 
     for tweet in all_tweets:
 
-        tweet_id = tweet.get(
-            "id"
+        tweet_id = str(
+            tweet.get(
+                "id",
+                ""
+            )
         )
 
         if not tweet_id:
             continue
 
         if tweet_id in unique:
+
+            # Prefer Sorsa if the same tweet
+            # was returned by both providers.
+
+            if (
+                tweet.get("provider")
+                == "Sorsa"
+            ):
+
+                unique[
+                    tweet_id
+                ] = tweet
+
             continue
 
         unique[
@@ -1181,17 +1585,17 @@ def main():
         f"{len(tweets)}"
     )
 
-    # --------------------------------------------------------
-    # ONLY NEW POSTS
-    # --------------------------------------------------------
+    # ========================================================
+    # NEW POSTS
+    # ========================================================
 
     new_tweets = []
 
     for tweet in tweets:
 
-        tweet_id = tweet[
-            "id"
-        ]
+        tweet_id = str(
+            tweet["id"]
+        )
 
         if tweet_id in seen:
 
@@ -1206,33 +1610,49 @@ def main():
         f"{len(new_tweets)}"
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # PROCESS EVERY NEW POST
-    #
-    # IMPORTANT:
-    # THERE IS NO "ONE PER SOURCE" LIMIT.
-    # EVERY NEW POST IS PROCESSED.
-    # --------------------------------------------------------
+    # ========================================================
 
     sent_count = 0
 
-    for tweet in reversed(
-        new_tweets
-    ):
+    # Newest first when timestamps are available.
+    # If timestamps aren't parseable, preserve
+    # provider order.
+
+    def sort_key(tweet):
+
+        return str(
+            tweet.get(
+                "created_at",
+                ""
+            )
+        )
+
+    new_tweets.sort(
+        key=sort_key,
+        reverse=True
+    )
+
+    for tweet in new_tweets:
 
         print(
             "\n--------------------------------------"
         )
 
         print(
+            f"PROVIDER: "
+            f"{tweet.get('provider')}"
+        )
+
+        print(
+            f"ACCOUNT: "
             f"@{tweet.get('username')}"
         )
 
         print(
-            tweet.get(
-                "text",
-                ""
-            )[:500]
+            f"POST: "
+            f"{tweet.get('text', '')[:700]}"
         )
 
         editorial = groq_edit(
@@ -1246,9 +1666,8 @@ def main():
                 "Editorial generation failed."
             )
 
-            # IMPORTANT:
-            # Do NOT mark as seen.
-            # It will be retried next run.
+            # DO NOT mark as seen.
+            # Retry on the next run.
 
             continue
 
@@ -1257,7 +1676,8 @@ def main():
             editorial
         )
 
-        # Telegram maximum message size
+        # Telegram limit safety.
+
         if len(message) > 3900:
 
             message = (
@@ -1272,7 +1692,7 @@ def main():
         if sent:
 
             seen.add(
-                tweet["id"]
+                str(tweet["id"])
             )
 
             sent_count += 1
@@ -1289,17 +1709,17 @@ def main():
                 "NOT marked as seen"
             )
 
-    # --------------------------------------------------------
-    # SAVE STATE
-    # --------------------------------------------------------
+    # ========================================================
+    # SAVE
+    # ========================================================
 
     save_seen(
         seen
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SUMMARY
-    # --------------------------------------------------------
+    # ========================================================
 
     print(
         "\n======================================"
@@ -1322,6 +1742,11 @@ def main():
     print(
         f"Posts found: "
         f"{len(all_tweets)}"
+    )
+
+    print(
+        f"Unique posts: "
+        f"{len(tweets)}"
     )
 
     print(
