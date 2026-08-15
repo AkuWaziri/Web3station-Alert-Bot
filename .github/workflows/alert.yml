@@ -1,25 +1,20 @@
-name: Web3Station Crypto Alert
+name: Crypto Alert Bot
 
 on:
   schedule:
-    - cron: "0 */2 * * *"
-
-  workflow_dispatch:
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
 
 permissions:
   contents: write
 
 jobs:
   run-bot:
-
     runs-on: ubuntu-latest
 
     steps:
-
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -27,41 +22,27 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests feedparser
+        run: pip install -r requirements.txt
 
-      - name: Run Web3Station
+      - name: Run bot
         env:
-
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-
+          CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
-
+          PROTOCOLS: ${{ secrets.PROTOCOLS }}
+          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
+          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
           CMC_API_KEY: ${{ secrets.CMC_API_KEY }}
           COINGECKO_API_KEY: ${{ secrets.COINGECKO_API_KEY }}
-          CRYPTOPANIC_KEY: ${{ secrets.CRYPTOPANIC_KEY }}
-
-          LUNARCRUSH_API_KEY: ${{ secrets.LUNARCRUSH_API_KEY }}
-          NEYNAR_API_KEY: ${{ secrets.NEYNAR_API_KEY }}
           SORSA_API_KEY: ${{ secrets.SORSA_API_KEY }}
-
         run: python main.py
 
-      - name: Save bot state
+      - name: Commit updated state files
         run: |
-
-          git config user.name "web3station-bot"
-          git config user.email "web3station-bot@users.noreply.github.com"
-
-          git add seen_ids.json
-
-          if git diff --cached --quiet; then
-            echo "No state changes to commit."
-          else
-            git commit -m "update Web3Station state [skip ci]"
-            git pull --rebase origin main
-            git push
-          fi
+          git config user.name "crypto-alert-bot"
+          git config user.email "bot@users.noreply.github.com"
+          git add seen_ids.json topic_history.json || true
+          git diff --staged --quiet || git commit -m "update bot state [skip ci]"
+          git pull --rebase origin main || true
+          git push
