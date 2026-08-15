@@ -2,7 +2,6 @@ name: X Account Watcher
 
 on:
   schedule:
-    # every 5 minutes
     - cron: "*/5 * * * *"
   workflow_dispatch: {}
 
@@ -31,9 +30,12 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
-          TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
-          WATCHED_X_ACCOUNTS: ${{ secrets.WATCHED_X_ACCOUNTS }}
+
+          TWITTERAPIS_KEY: ${{ secrets.TWITTERAPIS_KEY }}
+
+          TRACKED_X_ACCOUNTS: ${{ secrets.TRACKED_X_ACCOUNTS }}
           X_SEARCH_QUERIES: ${{ secrets.X_SEARCH_QUERIES }}
+
         run: python watcher.py
 
       - name: Save watcher state
