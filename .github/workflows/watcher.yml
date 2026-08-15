@@ -33,6 +33,7 @@ jobs:
           GROQ_MODEL: ${{ secrets.GROQ_MODEL }}
           TWITTERAPI_KEY: ${{ secrets.TWITTERAPI_KEY }}
           WATCHED_X_ACCOUNTS: ${{ secrets.WATCHED_X_ACCOUNTS }}
+          X_SEARCH_QUERIES: ${{ secrets.X_SEARCH_QUERIES }}
         run: python watcher.py
 
       - name: Save watcher state
