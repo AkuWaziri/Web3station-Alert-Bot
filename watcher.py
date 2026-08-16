@@ -1,9 +1,8 @@
 import os
 import json
-import time
 import hashlib
 import requests
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 
 # ============================================================
@@ -17,30 +16,70 @@ TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
-GROQ_MODEL = os.getenv(
-    "GROQ_MODEL",
-    "openai/gpt-oss-120b"
-)
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
+# IMPORTANT:
+# GitHub secret must be named TRACKED_X_ACCOUNTS
 TRACKED_X_ACCOUNTS = [
     x.strip().lstrip("@")
-    for x in os.getenv(
-        "TRACKED_X_ACCOUNTS",
-        ""
-    ).split(",")
+    for x in os.getenv("TRACKED_X_ACCOUNTS", "").split(",")
     if x.strip()
 ]
 
 X_SEARCH_QUERIES = [
     x.strip()
-    for x in os.getenv(
-        "X_SEARCH_QUERIES",
-        ""
-    ).split(",")
+    for x in os.getenv("X_SEARCH_QUERIES", "").split(",")
     if x.strip()
 ]
 
 SEEN_FILE = "x_seen_ids.json"
+
+# Do not process posts older than this.
+MAX_POST_AGE_HOURS = 24
+
+# Search results are intentionally limited to avoid flooding Telegram.
+MAX_SEARCH_POSTS_PER_QUERY = 5
+
+# Tracked accounts get priority.
+MAX_ACCOUNT_POSTS_PER_ACCOUNT = 10
+
+
+# ============================================================
+# NICHE FILTER
+# ============================================================
+
+NICHE_TERMS = [
+    "crypto",
+    "web3",
+    "defi",
+    "stablecoin",
+    "stablecoins",
+    "usdc",
+    "usdt",
+    "payments",
+    "payment",
+    "crypto payments",
+    "onchain",
+    "on-chain",
+    "wallet",
+    "wallets",
+    "rwa",
+    "real world assets",
+    "tokenization",
+    "tokenisation",
+    "ai agent",
+    "ai agents",
+    "agentic",
+    "agentic commerce",
+    "ai crypto",
+    "token",
+    "remittance",
+    "financial infrastructure",
+    "onchain finance",
+    "crypto infrastructure",
+    "institutional crypto",
+    "crypto regulation",
+]
 
 
 # ============================================================
@@ -50,18 +89,16 @@ SEEN_FILE = "x_seen_ids.json"
 SESSION = requests.Session()
 
 SESSION.headers.update({
-    "User-Agent": "Web3Station-X-Watcher/2.0"
+    "User-Agent": "Web3Station-X-Watcher/3.0"
 })
 
 
 # ============================================================
-# HELPERS
+# BASIC HELPERS
 # ============================================================
 
 def now():
-    return datetime.now(
-        timezone.utc
-    ).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def clean_text(value):
@@ -87,6 +124,92 @@ def make_id(*parts):
     ).hexdigest()
 
 
+def is_niche_relevant(text):
+    text = clean_text(text).lower()
+
+    return any(
+        term in text
+        for term in NICHE_TERMS
+    )
+
+
+def is_tracked_account(username):
+    username = str(
+        username or ""
+    ).lstrip("@").lower()
+
+    return username in {
+        account.lower()
+        for account in TRACKED_X_ACCOUNTS
+    }
+
+
+# ============================================================
+# DATE HANDLING
+# ============================================================
+
+def parse_date(value):
+
+    if not value:
+        return None
+
+    value = str(value).strip()
+
+    formats = [
+        "%Y-%m-%dT%H:%M:%S.%fZ",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%dT%H:%M:%S%z",
+        "%Y-%m-%dT%H:%M:%S.%f%z",
+        "%a %b %d %H:%M:%S %z %Y",
+        "%Y-%m-%d %H:%M:%S%z",
+        "%Y-%m-%d %H:%M:%S",
+    ]
+
+    for fmt in formats:
+
+        try:
+
+            dt = datetime.strptime(
+                value,
+                fmt
+            )
+
+            if dt.tzinfo is None:
+                dt = dt.replace(
+                    tzinfo=timezone.utc
+                )
+
+            return dt.astimezone(
+                timezone.utc
+            )
+
+        except ValueError:
+            continue
+
+    return None
+
+
+def is_fresh(tweet):
+
+    created = parse_date(
+        tweet.get("created_at", "")
+    )
+
+    # If provider gives no usable date,
+    # don't automatically reject the post.
+    if created is None:
+        return True
+
+    age = (
+        datetime.now(timezone.utc)
+        - created
+    )
+
+    return age <= timedelta(
+        hours=MAX_POST_AGE_HOURS
+    )
+
+
 # ============================================================
 # STATE
 # ============================================================
@@ -104,6 +227,7 @@ def load_seen():
             data = json.load(f)
 
             if isinstance(data, list):
+
                 return set(
                     str(x)
                     for x in data
@@ -137,10 +261,6 @@ def load_seen():
 def save_seen(seen):
 
     try:
-
-        # Keep the state manageable.
-        # 10,000 tweet IDs is plenty for
-        # duplicate protection.
 
         ids = list(seen)[-10000:]
 
@@ -215,39 +335,27 @@ def twitterapis_get(
         )
 
         if response.status_code == 200:
-
             return response.json()
 
         if response.status_code == 401:
-
             print(
-                "[TWITTERAPIS] "
-                "Invalid API key"
+                "[TWITTERAPIS] Invalid API key"
             )
 
-            return None
-
-        if response.status_code == 402:
-
+        elif response.status_code == 402:
             print(
-                "[TWITTERAPIS] "
-                "API credits exhausted"
+                "[TWITTERAPIS] API credits exhausted"
             )
 
-            return None
-
-        if response.status_code == 429:
-
+        elif response.status_code == 429:
             print(
-                "[TWITTERAPIS] "
-                "Rate limited"
+                "[TWITTERAPIS] Rate limited"
             )
 
-            return None
-
-        print(
-            response.text[:1000]
-        )
+        else:
+            print(
+                response.text[:1000]
+            )
 
     except Exception as exc:
 
@@ -361,8 +469,7 @@ def sorsa_search(
             return []
 
         print(
-            f"[SORSA] "
-            f"{len(tweets)} posts"
+            f"[SORSA] {len(tweets)} posts"
         )
 
         return tweets
@@ -377,7 +484,7 @@ def sorsa_search(
 
 
 # ============================================================
-# EXTRACT TWITTERAPIS TWEETS
+# EXTRACT
 # ============================================================
 
 def extract_tweets(data):
@@ -395,9 +502,7 @@ def extract_tweets(data):
         "results"
     ]:
 
-        value = data.get(
-            key
-        )
+        value = data.get(key)
 
         if isinstance(
             value,
@@ -410,7 +515,7 @@ def extract_tweets(data):
 
 
 # ============================================================
-# NORMALIZE TWITTERAPIS TWEET
+# NORMALIZE TWITTERAPIS
 # ============================================================
 
 def normalize_twitterapis_tweet(
@@ -431,7 +536,6 @@ def normalize_twitterapis_tweet(
     )
 
     if not tweet_id:
-
         return None
 
     text = clean_text(
@@ -445,7 +549,6 @@ def normalize_twitterapis_tweet(
     )
 
     if not text:
-
         return None
 
     author = tweet.get(
@@ -457,7 +560,6 @@ def normalize_twitterapis_tweet(
         author,
         dict
     ):
-
         author = {}
 
     username = (
@@ -468,15 +570,14 @@ def normalize_twitterapis_tweet(
 
     name = (
         author.get("name")
-        or tweet.get(
-            "name",
-            username
-        )
+        or tweet.get("name")
+        or username
     )
 
-    created_at = tweet.get(
-        "created_at",
-        ""
+    created_at = (
+        tweet.get("created_at")
+        or tweet.get("createdAt")
+        or ""
     )
 
     username = str(
@@ -488,46 +589,29 @@ def normalize_twitterapis_tweet(
     )
 
     return {
-
-        "id":
-            tweet_id,
-
-        "text":
-            text,
-
-        "username":
-            username,
-
-        "name":
-            str(name or ""),
-
-        "created_at":
-            created_at,
-
+        "id": tweet_id,
+        "text": text,
+        "username": username,
+        "name": str(name or ""),
+        "created_at": created_at,
         "url":
             f"https://x.com/"
             f"{username}/status/"
             f"{tweet_id}",
-
-        "provider":
-            "TwitterAPIs"
-
+        "provider": "TwitterAPIs"
     }
 
 
 # ============================================================
-# NORMALIZE SORSA TWEET
+# NORMALIZE SORSA
 # ============================================================
 
-def normalize_sorsa_tweet(
-    tweet
-):
+def normalize_sorsa_tweet(tweet):
 
     if not isinstance(
         tweet,
         dict
     ):
-
         return None
 
     tweet_id = (
@@ -536,7 +620,6 @@ def normalize_sorsa_tweet(
     )
 
     if not tweet_id:
-
         return None
 
     text = clean_text(
@@ -550,7 +633,6 @@ def normalize_sorsa_tweet(
     )
 
     if not text:
-
         return None
 
     user = tweet.get(
@@ -562,7 +644,6 @@ def normalize_sorsa_tweet(
         user,
         dict
     ):
-
         user = {}
 
     username = (
@@ -579,10 +660,9 @@ def normalize_sorsa_tweet(
     )
 
     created_at = (
-        tweet.get(
-            "created_at",
-            ""
-        )
+        tweet.get("created_at")
+        or tweet.get("createdAt")
+        or ""
     )
 
     username = str(
@@ -594,35 +674,21 @@ def normalize_sorsa_tweet(
     )
 
     return {
-
-        "id":
-            tweet_id,
-
-        "text":
-            text,
-
-        "username":
-            username,
-
-        "name":
-            str(name or ""),
-
-        "created_at":
-            created_at,
-
+        "id": tweet_id,
+        "text": text,
+        "username": username,
+        "name": str(name or ""),
+        "created_at": created_at,
         "url":
             f"https://x.com/"
             f"{username}/status/"
             f"{tweet_id}",
-
-        "provider":
-            "Sorsa"
-
+        "provider": "Sorsa"
     }
 
 
 # ============================================================
-# FETCH ACCOUNT FROM TWITTERAPIS
+# ACCOUNT FETCH
 # ============================================================
 
 def fetch_account_twitterapis(
@@ -637,23 +703,14 @@ def fetch_account_twitterapis(
     data = twitterapis_get(
         "/user/tweets",
         params={
-            "username":
-                username
+            "username": username
         }
     )
 
     if not data:
-
-        print(
-            "[TWITTERAPIS ACCOUNT] "
-            "no response"
-        )
-
         return []
 
-    tweets = extract_tweets(
-        data
-    )
+    tweets = extract_tweets(data)
 
     results = []
 
@@ -666,31 +723,39 @@ def fetch_account_twitterapis(
             )
         )
 
-        if normalized:
+        if not normalized:
+            continue
 
-            results.append(
-                normalized
-            )
+        if not is_fresh(normalized):
+            continue
+
+        # Tracked accounts are still subject
+        # to niche filtering.
+        if not is_niche_relevant(
+            normalized["text"]
+        ):
+            continue
+
+        results.append(
+            normalized
+        )
+
+        if len(results) >= MAX_ACCOUNT_POSTS_PER_ACCOUNT:
+            break
 
     print(
         f"[TWITTERAPIS ACCOUNT] "
-        f"{len(results)} posts"
+        f"usable posts: {len(results)}"
     )
 
     return results
 
 
-# ============================================================
-# FETCH ACCOUNT FROM SORSA
-# ============================================================
-
 def fetch_account_sorsa(
     username
 ):
 
-    query = (
-        f"from:{username}"
-    )
+    query = f"from:{username}"
 
     raw_tweets = sorsa_search(
         query,
@@ -702,28 +767,48 @@ def fetch_account_sorsa(
     for tweet in raw_tweets:
 
         normalized = (
-            normalize_sorsa_tweet(
-                tweet
-            )
+            normalize_sorsa_tweet(tweet)
         )
 
-        if normalized:
+        if not normalized:
+            continue
 
-            results.append(
-                normalized
-            )
+        if not is_fresh(normalized):
+            continue
+
+        if not is_niche_relevant(
+            normalized["text"]
+        ):
+            continue
+
+        # Ensure this really belongs
+        # to the tracked account.
+        if (
+            normalized["username"]
+            and
+            normalized["username"].lower()
+            != username.lower()
+        ):
+            continue
+
+        results.append(
+            normalized
+        )
+
+        if len(results) >= MAX_ACCOUNT_POSTS_PER_ACCOUNT:
+            break
 
     print(
         f"[SORSA ACCOUNT] "
         f"@{username}: "
-        f"{len(results)} posts"
+        f"{len(results)} usable posts"
     )
 
     return results
 
 
 # ============================================================
-# FETCH SEARCH FROM TWITTERAPIS
+# SEARCH
 # ============================================================
 
 def fetch_search_twitterapis(
@@ -738,21 +823,15 @@ def fetch_search_twitterapis(
     data = twitterapis_get(
         "/tweet/advanced_search",
         params={
-            "query":
-                query,
-
-            "product":
-                "Latest"
+            "query": query,
+            "product": "Latest"
         }
     )
 
     if not data:
-
         return []
 
-    tweets = extract_tweets(
-        data
-    )
+    tweets = extract_tweets(data)
 
     results = []
 
@@ -764,23 +843,31 @@ def fetch_search_twitterapis(
             )
         )
 
-        if normalized:
+        if not normalized:
+            continue
 
-            results.append(
-                normalized
-            )
+        if not is_fresh(normalized):
+            continue
+
+        if not is_niche_relevant(
+            normalized["text"]
+        ):
+            continue
+
+        results.append(
+            normalized
+        )
+
+        if len(results) >= MAX_SEARCH_POSTS_PER_QUERY:
+            break
 
     print(
         f"[TWITTERAPIS SEARCH] "
-        f"{len(results)} posts"
+        f"usable posts: {len(results)}"
     )
 
     return results
 
-
-# ============================================================
-# FETCH SEARCH FROM SORSA
-# ============================================================
 
 def fetch_search_sorsa(
     query
@@ -796,239 +883,293 @@ def fetch_search_sorsa(
     for tweet in raw_tweets:
 
         normalized = (
-            normalize_sorsa_tweet(
-                tweet
-            )
+            normalize_sorsa_tweet(tweet)
         )
 
-        if normalized:
+        if not normalized:
+            continue
 
-            results.append(
-                normalized
-            )
+        if not is_fresh(normalized):
+            continue
+
+        if not is_niche_relevant(
+            normalized["text"]
+        ):
+            continue
+
+        results.append(
+            normalized
+        )
+
+        if len(results) >= MAX_SEARCH_POSTS_PER_QUERY:
+            break
 
     print(
         f"[SORSA SEARCH] "
-        f"{len(results)} posts"
+        f"usable posts: {len(results)}"
     )
 
     return results
 
 
 # ============================================================
-# GROQ EDITOR
+# GROQ
 # ============================================================
 
-def groq_edit(
-    tweet
-):
+def groq_edit(tweet):
 
     if not GROQ_API_KEY:
 
         print(
-            "[GROQ ERROR] "
-            "GROQ_API_KEY is missing"
+            "[GROQ ERROR] GROQ_API_KEY missing"
         )
 
         return None
 
     system_prompt = """
-You are the senior editorial writer
-for Web3Station.
+You are the senior editorial writer for
+Web3Station, a serious crypto and technology
+intelligence feed.
 
-You turn fresh X posts into strong,
-human social-media content.
+Turn the supplied fresh X post into a useful,
+human-sounding social-media draft.
 
-The result must sound like a real,
-intelligent crypto writer thinking
-through an idea.
+The draft must sound written by an intelligent
+human who understands crypto, technology,
+markets and internet culture.
 
-Do NOT sound like:
+Do not sound like an AI summary.
 
-- an AI news summary
-- a press release
-- a corporate marketing team
-- a generic crypto influencer
-- a content farm
-- a chatbot
+Do not simply paraphrase the source.
 
-Do not simply paraphrase the original post.
+Find the underlying idea and develop it.
 
-Find the idea underneath it.
+==================================================
+WRITING STYLE
+==================================================
 
-The draft should have an actual point.
+Choose ONE style naturally based on the source.
 
-STYLE VARIATION
+Possible styles:
 
-Choose naturally based on the subject.
+Professional and formal
+Casual and friendly
+Educational
+Explanatory
+Analytical
+My take
+Curious
+Skeptical
+Assertive
+Optimistic
+Worried
+Encouraging
+Surprised
+Leadership
+Builder-focused
+Investor-focused
+Technical
+Philosophical
+Observational
+Contrarian
+Narrative
+Creative and character-driven
+Protagonist-style
+Comparative
+Historical
+Provocative
 
-Possible modes include:
+Do not tell the reader which style you selected.
 
-- educational
-- explanatory
-- analytical
-- my take
-- skeptical
-- conversational
-- observational
-- provocative
-- technical
-- philosophical
-- historical
-- comparative
-- narrative
-- contrarian
-- curious
-- builder-focused
-- investor-focused
-- market-focused
+Do not use the same opening pattern repeatedly.
 
-Do not announce the mode.
+Sometimes begin with:
 
-Do not use the same style repeatedly.
+a question
+an observation
+a surprising detail
+a contrast
+a direct statement
+a short story
+a technical explanation
+a strong opinion
 
-Sometimes start directly.
+Sometimes use:
 
-Sometimes start with a question.
+metaphor
+analogy
+contrast
+irony
+rhythm
+repetition
+understatement
+rhetorical questions
+narrative progression
 
-Sometimes start with an observation.
+Use these only when natural.
 
-Sometimes build from a small detail.
+Do not make every post poetic.
 
-Sometimes explain the concept from first principles.
+==================================================
+HUMAN WRITING
+==================================================
 
-Sometimes make a comparison.
+Use natural sentence rhythm.
 
-Sometimes use contrast.
+Mix short and medium sentences.
 
-Sometimes use a short sentence
-followed by a longer thought.
+Do not make every sentence the same length.
 
-Sometimes use understated humor.
+Avoid generic AI phrases.
 
-Sometimes use a literary device when
-it genuinely improves the writing.
+Avoid:
 
-Useful literary techniques include:
-
-- metaphor
-- analogy
-- contrast
-- irony
-- repetition
-- rhythm
-- understatement
-- rhetorical questions
-- narrative progression
-- vivid but restrained imagery
-
-Do not force literary language.
-
-The writing should still sound like someone
-who spends time on crypto and technology.
-
-PERSONAL VOICE
-
-You may sometimes use expressions such as:
-
-"my take:"
-
-"what stands out to me is..."
-
-"the part people may miss is..."
-
-"i think the more interesting question is..."
-
-"there's a bigger story here."
-
-But do NOT use these repeatedly.
-
-If you use "my take", it represents an
-editorial viewpoint, not a claim that the
-writer personally witnessed the event.
-
-FACTUAL RULES
-
-Never invent:
-
-- facts
-- numbers
-- partnerships
-- people
-- quotes
-- funding
-- product features
-- dates
-- technical capabilities
-
-Do not turn speculation into fact.
-
-Do not claim the writer personally
-experienced something unless the source
-supports it.
-
-If something is uncertain, write about
-the uncertainty.
-
-DEPTH
-
-Do not make every draft short.
-
-Some posts should be concise.
-
-Some should develop the idea across
-multiple paragraphs.
-
-Some should teach something.
-
-Some should explain why a development
-matters.
-
-Some should examine a second-order effect.
-
-Some should challenge the obvious
-interpretation.
-
-Vary the length naturally.
-
-Do not pad the draft.
-
-Do not repeat the same idea.
-
-Do not use unnecessary hashtags.
-
-Do not use excessive emojis.
-
-Avoid corporate PR language.
-
-Never casually use:
-
-"game changer"
+"this is a game changer"
 "revolutionary"
 "the future is here"
 "this is huge"
 "mass adoption is coming"
 "paradigm shift"
+"the crypto landscape is evolving"
 
-unless discussing those phrases critically.
+unless directly discussing those phrases.
 
-The final draft should be useful enough
-that a crypto reader would want to stop
-and read it.
+Do not force enthusiasm.
 
+Do not force negativity.
+
+Do not use excessive emojis.
+
+Do not use unnecessary hashtags.
+
+Do not use corporate PR language.
+
+Do not sound like a news headline.
+
+==================================================
+LENGTH
+==================================================
+
+The DRAFT must be medium length.
+
+Target approximately 70-150 words.
+
+It can be shorter when the source is simple.
+
+It can be slightly longer when explanation
+is necessary.
+
+Do not pad the writing.
+
+Do not repeat the same point.
+
+==================================================
+EDITORIAL DEPTH
+==================================================
+
+Depending on the source, the draft may:
+
+teach the reader something
+
+explain why the development matters
+
+identify a second-order effect
+
+challenge the obvious interpretation
+
+connect two ideas
+
+highlight an overlooked detail
+
+compare it with an existing model
+
+explain the infrastructure underneath it
+
+discuss an opportunity
+
+discuss a risk
+
+make a reasoned prediction
+
+give an editorial viewpoint
+
+But never invent information.
+
+==================================================
+FACTUAL RULES
+==================================================
+
+Never invent:
+
+facts
+numbers
+dates
+people
+quotes
+funding
+partnerships
+products
+technical capabilities
+events
+
+Never turn speculation into fact.
+
+If the source is speculative,
+keep the draft speculative.
+
+If the source is uncertain,
+preserve that uncertainty.
+
+Do not claim personal experience.
+
+==================================================
+CATEGORY
+==================================================
+
+Use a concise category such as:
+
+AI x Crypto Infrastructure
+Stablecoin Payments
+Onchain Finance
+RWA & Tokenization
+Crypto Infrastructure
+DeFi
+Bitcoin
+Ethereum
+Solana
+Wallets
+Crypto Regulation
+Security
+NFTs
+AI Agents
+Developer Ecosystem
+Crypto Markets
+
+Choose the category that best fits the source.
+
+==================================================
+ANGLE
+==================================================
+
+Write one or two concise sentences explaining
+what makes the source interesting.
+
+The angle should NOT merely repeat the headline.
+
+==================================================
 OUTPUT
+==================================================
 
 Return EXACTLY:
 
 CATEGORY:
-one concise category
+...
 
 ANGLE:
-one or two sentences describing
-the editorial angle
+...
 
 DRAFT:
-the complete social-media draft
+...
 
 Nothing before CATEGORY.
 
@@ -1042,16 +1183,16 @@ SOURCE ACCOUNT:
 AUTHOR:
 {tweet.get('name', '')}
 
-ORIGINAL POST:
+ORIGINAL X POST:
 {tweet.get('text', '')}
 
 POST DATE:
 {tweet.get('created_at', '')}
 
-PROVIDER:
+SOURCE PROVIDER:
 {tweet.get('provider', '')}
 
-SOURCE:
+SOURCE URL:
 {tweet.get('url', '')}
 """
 
@@ -1060,58 +1201,47 @@ SOURCE:
         "chat/completions"
     )
 
-    headers = {
-        "Authorization":
-            f"Bearer {GROQ_API_KEY}",
-
-        "Content-Type":
-            "application/json"
-    }
-
-    payload = {
-
-        "model":
-            GROQ_MODEL,
-
-        "temperature":
-            0.85,
-
-        "max_tokens":
-            1200,
-
-        "messages": [
-
-            {
-                "role":
-                    "system",
-
-                "content":
-                    system_prompt
-            },
-
-            {
-                "role":
-                    "user",
-
-                "content":
-                    user_prompt
-            }
-
-        ]
-    }
-
     try:
 
         response = SESSION.post(
             url,
-            headers=headers,
-            json=payload,
+            headers={
+                "Authorization":
+                    f"Bearer {GROQ_API_KEY}",
+
+                "Content-Type":
+                    "application/json"
+            },
+            json={
+                "model":
+                    GROQ_MODEL,
+
+                "temperature":
+                    0.9,
+
+                "max_tokens":
+                    650,
+
+                "messages": [
+                    {
+                        "role":
+                            "system",
+                        "content":
+                            system_prompt
+                    },
+                    {
+                        "role":
+                            "user",
+                        "content":
+                            user_prompt
+                    }
+                ]
+            },
             timeout=90
         )
 
         print(
-            f"[GROQ] "
-            f"{response.status_code}"
+            f"[GROQ] {response.status_code}"
         )
 
         if not response.ok:
@@ -1130,11 +1260,6 @@ SOURCE:
         )
 
         if not choices:
-
-            print(
-                "[GROQ] no choices"
-            )
-
             return None
 
         content = (
@@ -1144,11 +1269,6 @@ SOURCE:
         )
 
         if not content:
-
-            print(
-                "[GROQ] empty response"
-            )
-
             return None
 
         return parse_groq(
@@ -1165,12 +1285,10 @@ SOURCE:
 
 
 # ============================================================
-# PARSE GROQ
+# GROQ PARSER
 # ============================================================
 
-def parse_groq(
-    text
-):
+def parse_groq(text):
 
     text = text.strip()
 
@@ -1203,48 +1321,32 @@ def parse_groq(
         )
 
         print(
-            text[:2000]
+            text[:1500]
         )
 
         return None
 
     category = text[
-        category_pos
-        + len(category_marker):
+        category_pos + len(category_marker):
         angle_pos
     ].strip()
 
     angle = text[
-        angle_pos
-        + len(angle_marker):
+        angle_pos + len(angle_marker):
         draft_pos
     ].strip()
 
     draft = text[
-        draft_pos
-        + len(draft_marker):
+        draft_pos + len(draft_marker):
     ].strip()
 
-    if not category:
-        return None
-
-    if not angle:
-        return None
-
-    if not draft:
+    if not category or not angle or not draft:
         return None
 
     return {
-
-        "category":
-            category,
-
-        "angle":
-            angle,
-
-        "draft":
-            draft
-
+        "category": category,
+        "angle": angle,
+        "draft": draft
     }
 
 
@@ -1252,9 +1354,7 @@ def parse_groq(
 # TELEGRAM
 # ============================================================
 
-def send_telegram(
-    message
-):
+def send_telegram(message):
 
     if not TELEGRAM_TOKEN:
 
@@ -1279,24 +1379,20 @@ def send_telegram(
         f"bot{TELEGRAM_TOKEN}/sendMessage"
     )
 
-    payload = {
-
-        "chat_id":
-            TELEGRAM_CHAT_ID,
-
-        "text":
-            message,
-
-        "disable_web_page_preview":
-            False
-
-    }
-
     try:
 
         response = requests.post(
             url,
-            json=payload,
+            json={
+                "chat_id":
+                    TELEGRAM_CHAT_ID,
+
+                "text":
+                    message,
+
+                "disable_web_page_preview":
+                    False
+            },
             timeout=30
         )
 
@@ -1317,15 +1413,13 @@ def send_telegram(
             response.text[:1500]
         )
 
-        return False
-
     except Exception as exc:
 
         print(
             f"[TELEGRAM ERROR] {exc}"
         )
 
-        return False
+    return False
 
 
 # ============================================================
@@ -1338,8 +1432,6 @@ def format_message(
 ):
 
     return (
-        "🧠 WEB3STATION\n\n"
-
         "CATEGORY\n"
         f"{editorial['category']}\n\n"
 
@@ -1376,56 +1468,70 @@ def main():
         "======================================"
     )
 
-    # --------------------------------------------------------
-    # PROVIDER STATUS
-    # --------------------------------------------------------
+    print("\nPROVIDERS")
 
     print(
-        "\nPROVIDERS"
+        "TwitterAPIs:",
+        "configured"
+        if TWITTERAPIS_KEY
+        else "not configured"
     )
 
     print(
-        f"TwitterAPIs: "
-        f"{'configured' if TWITTERAPIS_KEY else 'not configured'}"
+        "Sorsa:",
+        "configured"
+        if SORSA_API_KEY
+        else "not configured"
     )
 
     print(
-        f"Sorsa: "
-        f"{'configured' if SORSA_API_KEY else 'not configured'}"
+        "Groq:",
+        "configured"
+        if GROQ_API_KEY
+        else "not configured"
     )
 
     print(
-        f"Groq: "
-        f"{'configured' if GROQ_API_KEY else 'not configured'}"
+        "Telegram:",
+        "configured"
+        if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID
+        else "not configured"
     )
 
-    print(
-        f"Telegram: "
-        f"{'configured' if TELEGRAM_TOKEN and TELEGRAM_CHAT_ID else 'not configured'}"
-    )
-
-    # At least one X provider must exist.
-
-    if (
-        not TWITTERAPIS_KEY
-        and not SORSA_API_KEY
-    ):
+    if not TWITTERAPIS_KEY and not SORSA_API_KEY:
 
         print(
-            "ERROR: "
-            "No X provider API key configured."
+            "\nERROR: No X provider configured."
         )
 
         return
 
-    # --------------------------------------------------------
-    # INPUT STATUS
-    # --------------------------------------------------------
+    if not TELEGRAM_TOKEN or not TELEGRAM_CHAT_ID:
+
+        print(
+            "\nERROR: Telegram is not configured."
+        )
+
+        return
+
+    if not GROQ_API_KEY:
+
+        print(
+            "\nERROR: Groq is not configured."
+        )
+
+        return
 
     print(
         f"\nTRACKED ACCOUNTS: "
         f"{len(TRACKED_X_ACCOUNTS)}"
     )
+
+    for account in TRACKED_X_ACCOUNTS:
+
+        print(
+            f"  @{account}"
+        )
 
     print(
         f"SEARCH QUERIES: "
@@ -1442,7 +1548,7 @@ def main():
     all_tweets = []
 
     # ========================================================
-    # TRACKED ACCOUNTS
+    # 1. TRACKED ACCOUNTS
     # ========================================================
 
     for username in TRACKED_X_ACCOUNTS:
@@ -1452,39 +1558,27 @@ def main():
         )
 
         print(
-            f"ACCOUNT: @{username}"
+            f"TRACKED ACCOUNT: @{username}"
         )
-
-        # TwitterAPIs
 
         if TWITTERAPIS_KEY:
 
-            tweets = (
+            all_tweets.extend(
                 fetch_account_twitterapis(
                     username
                 )
             )
 
-            all_tweets.extend(
-                tweets
-            )
-
-        # Sorsa
-
         if SORSA_API_KEY:
 
-            tweets = (
+            all_tweets.extend(
                 fetch_account_sorsa(
                     username
                 )
             )
 
-            all_tweets.extend(
-                tweets
-            )
-
     # ========================================================
-    # SEARCH QUERIES
+    # 2. SEARCH
     # ========================================================
 
     for query in X_SEARCH_QUERIES:
@@ -1497,37 +1591,21 @@ def main():
             f"SEARCH: {query}"
         )
 
-        # TwitterAPIs
-
         if TWITTERAPIS_KEY:
 
-            tweets = (
+            all_tweets.extend(
                 fetch_search_twitterapis(
                     query
                 )
             )
 
-            all_tweets.extend(
-                tweets
-            )
-
-        # Sorsa
-
         if SORSA_API_KEY:
 
-            tweets = (
+            all_tweets.extend(
                 fetch_search_sorsa(
                     query
                 )
             )
-
-            all_tweets.extend(
-                tweets
-            )
-
-    # ========================================================
-    # TOTAL
-    # ========================================================
 
     print(
         "\n======================================"
@@ -1547,34 +1625,29 @@ def main():
     for tweet in all_tweets:
 
         tweet_id = str(
-            tweet.get(
-                "id",
-                ""
-            )
+            tweet.get("id", "")
         )
 
         if not tweet_id:
             continue
 
-        if tweet_id in unique:
+        if tweet_id not in unique:
 
-            # Prefer Sorsa if the same tweet
-            # was returned by both providers.
+            unique[tweet_id] = tweet
 
+        else:
+
+            # Prefer TwitterAPIs for account
+            # information when available.
             if (
                 tweet.get("provider")
-                == "Sorsa"
+                == "TwitterAPIs"
+                and
+                unique[tweet_id].get("provider")
+                != "TwitterAPIs"
             ):
 
-                unique[
-                    tweet_id
-                ] = tweet
-
-            continue
-
-        unique[
-            tweet_id
-        ] = tweet
+                unique[tweet_id] = tweet
 
     tweets = list(
         unique.values()
@@ -1594,10 +1667,32 @@ def main():
     for tweet in tweets:
 
         tweet_id = str(
-            tweet["id"]
+            tweet.get("id", "")
         )
 
+        if not tweet_id:
+            continue
+
         if tweet_id in seen:
+            continue
+
+        if not is_fresh(tweet):
+
+            print(
+                f"[OLD] skipping "
+                f"@{tweet.get('username', '')}"
+            )
+
+            continue
+
+        if not is_niche_relevant(
+            tweet.get("text", "")
+        ):
+
+            print(
+                f"[IRRELEVANT] skipping "
+                f"@{tweet.get('username', '')}"
+            )
 
             continue
 
@@ -1605,34 +1700,42 @@ def main():
             tweet
         )
 
+    # ========================================================
+    # PRIORITY
+    # ========================================================
+
+    # Tracked accounts always come first.
+    new_tweets.sort(
+        key=lambda tweet: (
+            1
+            if is_tracked_account(
+                tweet.get("username", "")
+            )
+            else 0,
+
+            parse_date(
+                tweet.get(
+                    "created_at",
+                    ""
+                )
+            )
+            or datetime.min.replace(
+                tzinfo=timezone.utc
+            )
+        ),
+        reverse=True
+    )
+
     print(
         f"NEW POSTS: "
         f"{len(new_tweets)}"
     )
 
     # ========================================================
-    # PROCESS EVERY NEW POST
+    # PROCESS
     # ========================================================
 
     sent_count = 0
-
-    # Newest first when timestamps are available.
-    # If timestamps aren't parseable, preserve
-    # provider order.
-
-    def sort_key(tweet):
-
-        return str(
-            tweet.get(
-                "created_at",
-                ""
-            )
-        )
-
-    new_tweets.sort(
-        key=sort_key,
-        reverse=True
-    )
 
     for tweet in new_tweets:
 
@@ -1641,18 +1744,18 @@ def main():
         )
 
         print(
-            f"PROVIDER: "
-            f"{tweet.get('provider')}"
+            f"@{tweet.get('username', '')}"
         )
 
         print(
-            f"ACCOUNT: "
-            f"@{tweet.get('username')}"
+            f"{tweet.get('provider', '')}"
         )
 
         print(
-            f"POST: "
-            f"{tweet.get('text', '')[:700]}"
+            tweet.get(
+                "text",
+                ""
+            )[:500]
         )
 
         editorial = groq_edit(
@@ -1662,12 +1765,8 @@ def main():
         if not editorial:
 
             print(
-                "[SKIP] "
-                "Editorial generation failed."
+                "[SKIP] Groq failed"
             )
-
-            # DO NOT mark as seen.
-            # Retry on the next run.
 
             continue
 
@@ -1676,9 +1775,12 @@ def main():
             editorial
         )
 
-        # Telegram limit safety.
-
+        # Telegram maximum safety.
         if len(message) > 3900:
+
+            print(
+                "[TELEGRAM] message too long, truncating"
+            )
 
             message = (
                 message[:3900]
@@ -1698,15 +1800,15 @@ def main():
             sent_count += 1
 
             print(
-                "[POST] "
-                "marked as seen"
+                "[SUCCESS] "
+                "sent and marked as seen"
             )
 
         else:
 
             print(
-                "[POST] "
-                "NOT marked as seen"
+                "[FAILED] "
+                "not marked as seen"
             )
 
     # ========================================================
@@ -1760,7 +1862,7 @@ def main():
     )
 
     print(
-        "======================================"
+        "======================================" 
     )
 
 
