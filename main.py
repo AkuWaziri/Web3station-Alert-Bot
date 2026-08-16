@@ -1,8 +1,7 @@
 import os
 import json
 import hashlib
-import random
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from html import unescape
 
 import requests
@@ -10,8 +9,7 @@ import feedparser
 
 
 # ============================================================
-# WEB3STATION
-# SIMPLE REAL-TIME CRYPTO CONTENT RADAR
+# CONFIG
 # ============================================================
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
@@ -32,9 +30,12 @@ GROQ_MODEL = os.getenv(
 SEEN_FILE = "seen_ids.json"
 TOPIC_FILE = "topic_history.json"
 
+# Farcaster maximum age
+FARCASTER_MAX_AGE_HOURS = 72
+
 
 # ============================================================
-# TOPICS
+# CORE CONTENT NICHE
 # ============================================================
 
 PRIORITY_TOPICS = [
@@ -60,9 +61,7 @@ PRIORITY_TOPICS = [
     "financial infrastructure",
     "onchain finance",
     "defi",
-    "bitcoin",
-    "ethereum",
-    "solana",
+    "arc",
     "base",
     "arbitrum",
     "layer 2",
@@ -75,11 +74,13 @@ PRIORITY_TOPICS = [
     "nft",
     "nfts",
     "crypto",
+    "meme",
+    "memecomics",
 ]
 
 
 # ============================================================
-# NEWS
+# NEWS SOURCES
 # ============================================================
 
 RSS_FEEDS = [
@@ -109,7 +110,7 @@ REDDIT_SUBREDDITS = [
 
 
 # ============================================================
-# SOCIAL SEARCHES
+# SOCIAL / RESEARCH QUERIES
 # ============================================================
 
 SOCIAL_QUERIES = [
@@ -133,7 +134,7 @@ SESSION.headers.update({
 
 
 # ============================================================
-# HELPERS
+# BASIC HELPERS
 # ============================================================
 
 def clean_text(value):
@@ -181,45 +182,38 @@ def load_json(filename, default):
 
 
 def save_json(filename, data):
-    try:
-        with open(
-            filename,
-            "w",
-            encoding="utf-8"
-        ) as f:
-            json.dump(
-                data,
-                f,
-                indent=2,
-                ensure_ascii=False
-            )
+    with open(
+        filename,
+        "w",
+        encoding="utf-8"
+    ) as f:
 
-    except Exception as exc:
-        print(
-            f"[SAVE ERROR] {filename}: {exc}"
+        json.dump(
+            data,
+            f,
+            indent=2,
+            ensure_ascii=False
         )
 
 
 def get(url, **kwargs):
     try:
+
         response = SESSION.get(
             url,
-            timeout=25,
+            timeout=20,
             **kwargs
-        )
-
-        print(
-            f"[GET] {response.status_code} {url}"
         )
 
         if response.status_code == 200:
             return response
 
         print(
-            response.text[:500]
+            f"[HTTP {response.status_code}] {url}"
         )
 
     except Exception as exc:
+
         print(
             f"[REQUEST ERROR] {url}: {exc}"
         )
@@ -229,24 +223,26 @@ def get(url, **kwargs):
 
 def post(url, **kwargs):
     try:
+
         response = SESSION.post(
             url,
-            timeout=45,
+            timeout=30,
             **kwargs
-        )
-
-        print(
-            f"[POST] {response.status_code} {url}"
         )
 
         if response.status_code == 200:
             return response
 
         print(
-            response.text[:1000]
+            f"[POST {response.status_code}] {url}"
+        )
+
+        print(
+            response.text[:500]
         )
 
     except Exception as exc:
+
         print(
             f"[POST ERROR] {url}: {exc}"
         )
@@ -261,15 +257,19 @@ def post(url, **kwargs):
 def send_telegram(message):
 
     if not TELEGRAM_TOKEN:
+
         print(
             "[TELEGRAM ERROR] TELEGRAM_TOKEN is missing"
         )
+
         return False
 
     if not TELEGRAM_CHAT_ID:
+
         print(
             "[TELEGRAM ERROR] TELEGRAM_CHAT_ID is missing"
         )
+
         return False
 
     url = (
@@ -292,8 +292,7 @@ def send_telegram(message):
         )
 
         print(
-            f"[TELEGRAM STATUS] "
-            f"{response.status_code}"
+            f"[TELEGRAM STATUS] {response.status_code}"
         )
 
         print(
@@ -313,13 +312,15 @@ def send_telegram(message):
             "[TELEGRAM ERROR] Telegram rejected message"
         )
 
+        return False
+
     except Exception as exc:
 
         print(
             f"[TELEGRAM ERROR] {exc}"
         )
 
-    return False
+        return False
 
 
 # ============================================================
@@ -334,10 +335,12 @@ def is_relevant(item):
         + item.get("text", "")
     ).lower()
 
-    return any(
-        topic in text
-        for topic in PRIORITY_TOPICS
-    )
+    for topic in PRIORITY_TOPICS:
+
+        if topic in text:
+            return True
+
+    return False
 
 
 def relevance_score(item):
@@ -350,31 +353,32 @@ def relevance_score(item):
 
     score = 0
 
-    high_value_topics = [
-        "stablecoin",
-        "stablecoins",
-        "payments",
-        "payment",
-        "ai agents",
-        "ai agent",
-        "agentic commerce",
-        "rwa",
-        "tokenization",
-        "tokenisation",
-        "financial infrastructure",
-        "onchain finance",
-    ]
-
     for topic in PRIORITY_TOPICS:
 
         if topic in text:
 
-            if topic in high_value_topics:
+            if topic in [
+                "stablecoin",
+                "stablecoins",
+                "payments",
+                "payment",
+                "ai agents",
+                "ai agent",
+                "agentic commerce",
+                "rwa",
+                "tokenization",
+                "tokenisation",
+                "financial infrastructure",
+                "onchain finance",
+            ]:
+
                 score += 3
+
             else:
+
                 score += 1
 
-    important_events = [
+    for word in [
         "launch",
         "mainnet",
         "integration",
@@ -390,11 +394,7 @@ def relevance_score(item):
         "exploit",
         "attack",
         "outage",
-        "audit",
-        "announcement",
-    ]
-
-    for word in important_events:
+    ]:
 
         if word in text:
             score += 2
@@ -413,6 +413,155 @@ def relevance_score(item):
             score += 2
 
     return score
+
+
+# ============================================================
+# DATE HELPERS
+# ============================================================
+
+def parse_datetime(value):
+
+    if not value:
+        return None
+
+    if isinstance(
+        value,
+        datetime
+    ):
+
+        dt = value
+
+    else:
+
+        value = str(value).strip()
+
+        # ISO format
+        try:
+
+            dt = datetime.fromisoformat(
+                value.replace(
+                    "Z",
+                    "+00:00"
+                )
+            )
+
+        except Exception:
+
+            dt = None
+
+        # Common Twitter/RSS style
+        if dt is None:
+
+            formats = [
+                "%Y-%m-%dT%H:%M:%S.%fZ",
+                "%Y-%m-%dT%H:%M:%SZ",
+                "%Y-%m-%d %H:%M:%S%z",
+                "%a %b %d %H:%M:%S %z %Y",
+                "%Y-%m-%d %H:%M:%S",
+            ]
+
+            for fmt in formats:
+
+                try:
+
+                    dt = datetime.strptime(
+                        value,
+                        fmt
+                    )
+
+                    break
+
+                except Exception:
+                    continue
+
+    if dt is None:
+        return None
+
+    if dt.tzinfo is None:
+
+        dt = dt.replace(
+            tzinfo=timezone.utc
+        )
+
+    return dt.astimezone(
+        timezone.utc
+    )
+
+
+def is_recent_farcaster(created_at):
+
+    dt = parse_datetime(
+        created_at
+    )
+
+    if dt is None:
+
+        print(
+            "[FARCASTER] "
+            "Rejected post with invalid date"
+        )
+
+        return False
+
+    current = datetime.now(
+        timezone.utc
+    )
+
+    # Reject future timestamps.
+    if dt > current + timedelta(
+        minutes=5
+    ):
+
+        print(
+            "[FARCASTER] "
+            "Rejected future-dated post"
+        )
+
+        return False
+
+    age = current - dt
+
+    max_age = timedelta(
+        hours=FARCASTER_MAX_AGE_HOURS
+    )
+
+    if age > max_age:
+
+        print(
+            f"[FARCASTER] "
+            f"Rejected old cast: "
+            f"{age.total_seconds() / 3600:.1f}h old"
+        )
+
+        return False
+
+    hours = age.total_seconds() / 3600
+
+    if hours <= 24:
+
+        print(
+            f"[FARCASTER] "
+            f"Accepted fresh cast: "
+            f"{hours:.1f}h old"
+        )
+
+    elif hours <= 48:
+
+        print(
+            f"[FARCASTER] "
+            f"Accepted 24-48h cast: "
+            f"{hours:.1f}h old"
+        )
+
+    else:
+
+        print(
+            f"[FARCASTER] "
+            f"Accepted 48-72h cast: "
+            f"{hours:.1f}h old"
+        )
+
+    return True
 
 
 # ============================================================
@@ -438,12 +587,15 @@ def fetch_coinmarketcap():
 
     response = get(
         url,
+
         headers={
-            "X-CMC_PRO_API_KEY": CMC_API_KEY
+            "X-CMC_PRO_API_KEY":
+                CMC_API_KEY
         },
+
         params={
             "start": 1,
-            "limit": 100,
+            "limit": 50,
             "convert": "USD"
         }
     )
@@ -491,15 +643,6 @@ def fetch_coinmarketcap():
                 0
             )
 
-            if not isinstance(
-                change,
-                (int, float)
-            ):
-                continue
-
-            if abs(change) < 5:
-                continue
-
             text = (
                 f"{coin.get('name')} "
                 f"({symbol}) price "
@@ -508,6 +651,9 @@ def fetch_coinmarketcap():
                 f"24h volume ${volume:,.0f}; "
                 f"market cap ${market_cap:,.0f}"
             )
+
+            if abs(change) < 5:
+                continue
 
             results.append({
 
@@ -521,14 +667,11 @@ def fetch_coinmarketcap():
                     text,
 
                 "url":
-                    (
-                        "https://coinmarketcap.com/"
-                        "currencies/"
-                        + str(
-                            coin.get(
-                                "slug",
-                                ""
-                            )
+                    "https://coinmarketcap.com/currencies/"
+                    + str(
+                        coin.get(
+                            "slug",
+                            ""
                         )
                     ),
 
@@ -538,6 +681,7 @@ def fetch_coinmarketcap():
                         coin.get("id"),
                         round(change, 1)
                     )
+
             })
 
     except Exception as exc:
@@ -572,11 +716,13 @@ def fetch_coingecko():
 
     response = get(
         url,
+
         headers=headers,
+
         params={
             "vs_currency": "usd",
             "order": "market_cap_desc",
-            "per_page": 100,
+            "per_page": 50,
             "page": 1,
             "sparkline": "false"
         }
@@ -616,22 +762,15 @@ def fetch_coingecko():
                     (
                         f"{coin.get('name')} "
                         f"({coin.get('symbol', '').upper()}) "
-                        f"price "
-                        f"${coin.get('current_price', 0):,.6f}; "
-                        f"24h change "
-                        f"{change:.2f}%; "
-                        f"market cap "
-                        f"${coin.get('market_cap', 0):,.0f}; "
-                        f"24h volume "
-                        f"${coin.get('total_volume', 0):,.0f}"
+                        f"price ${coin.get('current_price', 0):,.6f}; "
+                        f"24h change {change:.2f}%; "
+                        f"market cap ${coin.get('market_cap', 0):,.0f}; "
+                        f"24h volume ${coin.get('total_volume', 0):,.0f}"
                     ),
 
                 "url":
-                    (
-                        "https://www.coingecko.com/"
-                        "en/coins/"
-                        f"{coin.get('id', '')}"
-                    ),
+                    f"https://www.coingecko.com/en/coins/"
+                    f"{coin.get('id', '')}",
 
                 "id":
                     make_id(
@@ -639,6 +778,7 @@ def fetch_coingecko():
                         coin.get("id"),
                         round(change, 1)
                     )
+
             })
 
     except Exception as exc:
@@ -651,7 +791,7 @@ def fetch_coingecko():
 
 
 # ============================================================
-# RSS NEWS
+# NEWS RSS
 # ============================================================
 
 def fetch_news():
@@ -670,7 +810,7 @@ def fetch_news():
                 url
             )
 
-            for entry in feed.entries:
+            for entry in feed.entries[:15]:
 
                 title = clean_text(
                     entry.get(
@@ -706,10 +846,9 @@ def fetch_news():
                         title,
 
                     "text":
-                        (
-                            f"{title}. "
-                            f"{summary}"
-                        )[:4000],
+                        f"{title}. {summary}"[
+                            :3000
+                        ],
 
                     "url":
                         link,
@@ -719,10 +858,14 @@ def fetch_news():
                             source,
                             link
                         )
+
                 }
 
                 if is_relevant(item):
-                    results.append(item)
+
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
@@ -751,8 +894,9 @@ def fetch_reddit():
 
         response = get(
             url,
+
             params={
-                "limit": 100,
+                "limit": 15,
                 "raw_json": 1
             }
         )
@@ -803,18 +947,15 @@ def fetch_reddit():
                         title,
 
                     "text":
-                        (
-                            f"{title}. "
-                            f"{body}"
-                        )[:4000],
+                        f"{title}. {body}"[
+                            :3000
+                        ],
 
                     "url":
-                        (
-                            "https://www.reddit.com"
-                            + item_data.get(
-                                "permalink",
-                                ""
-                            )
+                        "https://www.reddit.com"
+                        + item_data.get(
+                            "permalink",
+                            ""
                         ),
 
                     "comments":
@@ -829,10 +970,14 @@ def fetch_reddit():
                             subreddit,
                             item_data.get("id")
                         )
+
                 }
 
                 if is_relevant(item):
-                    results.append(item)
+
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
@@ -866,13 +1011,16 @@ def fetch_lunarcrush():
     )
 
     response = get(
+
         url,
+
         headers={
             "Authorization":
                 f"Bearer {LUNARCRUSH_API_KEY}"
         },
+
         params={
-            "limit": 100
+            "limit": 50
         }
     )
 
@@ -898,12 +1046,7 @@ def fetch_lunarcrush():
             if not symbol:
                 continue
 
-            text = json.dumps(
-                coin,
-                ensure_ascii=False
-            )[:4000]
-
-            item = {
+            results.append({
 
                 "source":
                     "LunarCrush",
@@ -912,7 +1055,10 @@ def fetch_lunarcrush():
                     f"{symbol} social activity",
 
                 "text":
-                    text,
+                    json.dumps(
+                        coin,
+                        ensure_ascii=False
+                    )[:3000],
 
                 "url":
                     "https://lunarcrush.com/",
@@ -921,12 +1067,13 @@ def fetch_lunarcrush():
                     make_id(
                         "lunarcrush",
                         symbol,
-                        text[:500]
+                        json.dumps(
+                            coin,
+                            sort_keys=True
+                        )[:500]
                     )
-            }
 
-            if is_relevant(item):
-                results.append(item)
+            })
 
     except Exception as exc:
 
@@ -955,23 +1102,30 @@ def fetch_neynar():
 
     for query in SOCIAL_QUERIES:
 
+        print(
+            f"[NEYNAR] searching: {query}"
+        )
+
         url = (
             "https://api.neynar.com/v2/"
             "farcaster/cast/search/"
         )
 
         response = get(
+
             url,
+
             headers={
                 "x-api-key":
                     NEYNAR_API_KEY
             },
+
             params={
                 "q":
                     query,
 
                 "limit":
-                    50
+                    25
             }
         )
 
@@ -988,6 +1142,11 @@ def fetch_neynar():
                 .get("casts", [])
             )
 
+            print(
+                f"[NEYNAR] "
+                f"{len(casts)} raw casts"
+            )
+
             for cast in casts:
 
                 text = clean_text(
@@ -1002,13 +1161,44 @@ def fetch_neynar():
                     ""
                 )
 
+                created_at = cast.get(
+                    "timestamp",
+                    cast.get(
+                        "created_at",
+                        ""
+                    )
+                )
+
                 if not text:
                     continue
 
-                author = (
-                    cast
-                    .get("author", {})
-                    .get("username", "")
+                # ------------------------------------------------
+                # HARD 72-HOUR FARCASTER FILTER
+                # ------------------------------------------------
+
+                if not is_recent_farcaster(
+                    created_at
+                ):
+
+                    continue
+
+                author = cast.get(
+                    "author",
+                    {}
+                )
+
+                if not isinstance(
+                    author,
+                    dict
+                ):
+
+                    author = {}
+
+                username = (
+                    author.get(
+                        "username",
+                        ""
+                    )
                 )
 
                 item = {
@@ -1017,36 +1207,41 @@ def fetch_neynar():
                         "Farcaster / Neynar",
 
                     "title":
-                        (
-                            "Farcaster discussion: "
-                            f"{query}"
-                        ),
+                        f"Farcaster discussion: {query}",
 
                     "text":
-                        text[:4000],
+                        text[:3000],
 
                     "url":
                         (
                             "https://warpcast.com/"
-                            f"{author}/"
-                            f"{cast_hash}"
+                            + str(username)
+                            + "/"
+                            + str(cast_hash)
                         ),
+
+                    "created_at":
+                        created_at,
 
                     "id":
                         make_id(
                             "neynar",
                             cast_hash
                         )
+
                 }
 
                 if is_relevant(item):
-                    results.append(item)
+
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
             print(
                 f"[NEYNAR ERROR] "
-                f"{exc}"
+                f"{query}: {exc}"
             )
 
     return results
@@ -1076,17 +1271,20 @@ def fetch_sorsa():
         )
 
         response = get(
+
             url,
+
             headers={
                 "ApiKey":
                     SORSA_API_KEY
             },
+
             params={
                 "query":
                     query,
 
                 "limit":
-                    50
+                    10
             }
         )
 
@@ -1106,6 +1304,7 @@ def fetch_sorsa():
                 tweets,
                 dict
             ):
+
                 tweets = tweets.get(
                     "tweets",
                     []
@@ -1137,18 +1336,15 @@ def fetch_sorsa():
                         "X / Sorsa",
 
                     "title":
-                        (
-                            "X discussion: "
-                            f"{query}"
-                        ),
+                        f"X discussion: {query}",
 
                     "text":
-                        text[:4000],
+                        text[:3000],
 
                     "url":
                         (
                             "https://x.com/i/web/status/"
-                            f"{tweet_id}"
+                            + str(tweet_id)
                         ),
 
                     "id":
@@ -1157,16 +1353,20 @@ def fetch_sorsa():
                             tweet_id,
                             text
                         )
+
                 }
 
                 if is_relevant(item):
-                    results.append(item)
+
+                    results.append(
+                        item
+                    )
 
         except Exception as exc:
 
             print(
                 f"[SORSA ERROR] "
-                f"{exc}"
+                f"{query}: {exc}"
             )
 
     return results
@@ -1186,176 +1386,99 @@ def groq_edit(item):
 
         return None
 
-    writing_styles = [
-        "educational",
-        "analytical",
-        "my take",
-        "conversational",
-        "skeptical",
-        "deep observation",
-        "explainer",
-        "builder perspective",
-        "market perspective",
-        "contrarian",
-        "elaborative",
-        "short sharp thesis",
-    ]
+    system_prompt = """
+You are the senior editorial writer
+for Web3Station.
 
-    selected_style = random.choice(
-        writing_styles
-    )
+Turn the supplied crypto/Web3 signal
+into a strong social-media draft.
 
-    system_prompt = f"""
-You are the editorial intelligence behind
-WEB3STATION, a crypto intelligence and content
-radar for a human crypto creator.
+The goal is to sound like a thoughtful
+human crypto writer, not an AI-generated
+news account.
 
-Your job is to turn a real source signal into
-a strong human social-media draft.
+The draft must have a genuine editorial
+point rather than merely rewriting the
+source.
 
-The draft must NOT sound like an AI-generated
-crypto news summary.
+STYLE
 
-CURRENT WRITING MODE:
-{selected_style}
+Choose the tone naturally according to
+the subject and angle.
 
-Use that mode naturally, but do not announce it.
+Randomly vary between appropriate styles
+such as:
 
-IMPORTANT:
+- Professional and formal
+- Memeconic
+- Degen
+- optimistic
+- Casual and friendly
+- Educational
+- Explanatory
+- Analytical
+- My take
+- Curious
+- Assertive
+- Encouraging
+- Optimistic
+- Worried
+- Skeptical
+- Surprised
+- Observational
+- Contrarian
+- Technical
+- Builder-focused
+- Investor-focused
+- Leadership
+- Protagonist/narrative
+- Creative and character-driven
+- Conversational
 
-Write like an intelligent human who spends time
-around crypto, technology and internet culture.
+Do NOT announce which style you selected.
 
-Human writing is not perfectly symmetrical.
+Do not use the same opening or structure
+repeatedly.
 
-Do not make every paragraph the same length.
+Sometimes begin with an observation.
 
-Do not make every sentence the same length.
+Sometimes with a question.
 
-Sometimes use a short sentence after a longer one.
+Sometimes with a strong statement.
 
-Sometimes start with an observation.
-
-Sometimes start with a question.
+Sometimes explain a concept.
 
 Sometimes use contrast.
 
-Sometimes use an analogy.
+Sometimes tell a small narrative.
 
-Sometimes use understatement.
+Sometimes use understated humor.
 
-Sometimes build an argument slowly.
+Sometimes use a metaphor or analogy.
 
-Sometimes make the main point immediately.
+Sometimes use literary techniques such
+as rhythm, repetition, irony, contrast,
+understatement or rhetorical questions,
+but only when they naturally improve the
+post.
 
-Sometimes leave a little tension in the conclusion.
+The writing should still sound like a
+real person who follows crypto closely.
 
-Sometimes use phrases such as:
-"my take:"
-"the interesting part is..."
-"what stands out to me..."
-"i think..."
-"there's a bigger question here..."
-"the part worth watching..."
-But do NOT use these in every post.
+VOICE
 
-The writing should vary naturally from post to post.
+Avoid:
 
-LITERARY FEATURES:
+- AI news-summary language
+- corporate PR
+- generic influencer language
+- exaggerated hype
+- repetitive phrases
+- empty conclusions
+- unnecessary hashtags
+- excessive emojis
 
-When appropriate, use:
-
-- contrast
-- metaphor
-- analogy
-- rhetorical questions
-- rhythm
-- repetition for emphasis
-- understatement
-- narrative progression
-- cause and effect
-- tension
-- irony when justified
-- vivid but restrained language
-
-Do not force literary devices into technical news.
-
-CRYPTO STYLE:
-
-The audience understands crypto.
-
-You can use terms such as:
-
-onchain
-liquidity
-stablecoins
-agents
-wallets
-DeFi
-L2
-RWA
-tokenization
-protocols
-settlement
-infrastructure
-capital
-builders
-
-Do not over-explain basic crypto terminology.
-
-However, when an unfamiliar technology appears,
-explain it clearly enough that an intelligent
-non-expert can follow the argument.
-
-CONTENT QUALITY:
-
-The post should contain an actual thought.
-
-Do not simply rewrite the source headline.
-
-Do not merely summarize what happened.
-
-Find the interesting implication.
-
-Ask:
-
-Why does this matter?
-
-What changes?
-
-What does this reveal?
-
-What should people watch?
-
-What assumption does this challenge?
-
-What is still unclear?
-
-What could happen next?
-
-Use only what the source supports.
-
-NEVER:
-
-- invent facts
-- invent statistics
-- invent partnerships
-- invent quotes
-- invent people
-- invent dates
-- invent adoption
-- invent market reactions
-- pretend speculation is fact
-- manufacture certainty
-- create fake urgency
-
-If something is uncertain, preserve that uncertainty.
-
-Do not automatically make the subject bullish.
-
-Do not automatically make it bearish.
-
-Do not use:
+Avoid phrases such as:
 
 "game changer"
 "revolutionary"
@@ -1364,95 +1487,132 @@ Do not use:
 "mass adoption is coming"
 "paradigm shift"
 
-unless the source itself genuinely supports
-the underlying claim, and even then prefer
-more precise language.
+unless discussing them critically.
 
-Do not use excessive emojis.
+FACTS
 
-Do not add hashtags unless genuinely useful.
+Never invent facts.
 
-Do not begin every post with a headline.
+Never invent numbers.
 
-Do not make every post a thread.
+Never invent partnerships.
 
-Do not make every post sound like a journalist.
+Never invent quotes.
 
-Some posts should feel like a personal observation.
-Some should feel educational.
-Some should feel analytical.
-Some should feel like a knowledgeable person
-thinking out loud.
+Never invent dates.
 
-LENGTH:
+Never invent product capabilities.
 
-Make the draft detailed enough to contain a real idea.
+Never turn speculation into fact.
 
-Normally aim for roughly 120-250 words.
+If the source is uncertain, preserve that
+uncertainty.
 
-Shorter is acceptable when the story only supports
-a short observation.
+DEPTH AND LENGTH
 
-Longer is acceptable when the subject needs explanation.
+The draft should be MEDIUM length.
 
-Never pad the draft just to reach a word count.
+Target approximately 80-180 words.
 
-OUTPUT:
+Do not make every draft exactly the same
+length.
+
+Some can be closer to 80 words.
+
+Some can be 120.
+
+Some can be 160-180.
+
+Do not pad the draft.
+
+Do not repeat the source unnecessarily.
+
+The draft should add interpretation,
+context, explanation or a useful second-order
+thought.
+
+The reader should understand why the signal
+matters.
+
+PERSONAL STYLE
+
+You may sometimes naturally use phrases like:
+
+"my take:"
+
+"what stands out to me is..."
+
+"the part people may miss is..."
+
+"i think the more interesting question is..."
+
+"there's a bigger story here."
+
+But do not repeatedly use these phrases.
+
+If you use "my take", do not invent a
+personal experience.
+
+CATEGORY
+
+Keep the category concise.
+
+Examples:
+
+AI x Crypto Infrastructure
+Stablecoin Payments
+Onchain Finance
+RWA & Tokenization
+DeFi
+Crypto Security
+Crypto Infrastructure
+AI Agents
+Web3 Adoption
+Bitcoin
+Ethereum
+Solana
+NFTs
+Crypto Regulation
+
+ANGLE
+
+Give one or two sentences explaining
+the interesting editorial angle.
+
+OUTPUT
 
 Return EXACTLY:
 
-CATEGORY
-one short category
+CATEGORY:
+one concise category
 
-ANGLE
-one or two concise sentences explaining the
-interesting editorial angle
+ANGLE:
+one or two sentences
 
-DRAFT
-the complete social-media draft
+DRAFT:
+the complete medium-length social-media draft
 
-SOURCE
-the original source URL
+Nothing before CATEGORY.
 
-Do not add:
-
-confidence scores
-evidence scores
-KOL scores
-narrative scores
-"what we know"
-"what we're inferring"
-"what could happen next"
-"what we don't know"
-content opportunity sections
-analysis labels
-extra commentary
-
-The output must contain ONLY:
-
-CATEGORY
-ANGLE
-DRAFT
-SOURCE
+Nothing after the DRAFT.
 """
 
-
     user_prompt = f"""
-SOURCE NAME:
+SOURCE:
 {item.get('source', '')}
 
 TITLE:
 {item.get('title', '')}
 
-SOURCE INFORMATION:
-{item.get('text', '')[:5000]}
+INFORMATION:
+{item.get('text', '')[:3500]}
 
-ORIGINAL SOURCE URL:
+SOURCE URL:
 {item.get('url', '')}
 
-Create the editorial feed now.
+PUBLISHED:
+{item.get('created_at', '')}
 """
-
 
     response = post(
 
@@ -1476,7 +1636,7 @@ Create the editorial feed now.
                 0.85,
 
             "max_tokens":
-                1200,
+                900,
 
             "messages": [
 
@@ -1497,6 +1657,7 @@ Create the editorial feed now.
                 }
 
             ]
+
         }
     )
 
@@ -1507,32 +1668,16 @@ Create the editorial feed now.
 
         data = response.json()
 
-        choices = data.get(
-            "choices",
-            []
-        )
-
-        if not choices:
-            print(
-                "[GROQ ERROR] No choices returned"
-            )
-            return None
-
         content = (
-            choices[0]
+            data
+            .get("choices", [{}])[0]
             .get("message", {})
             .get("content", "")
         )
 
         if not content:
-            print(
-                "[GROQ ERROR] Empty content"
-            )
-            return None
 
-        print(
-            "[GROQ] Editorial generated"
-        )
+            return None
 
         return parse_groq_output(
             content
@@ -1548,7 +1693,7 @@ Create the editorial feed now.
 
 
 # ============================================================
-# GROQ PARSER
+# GROQ OUTPUT PARSER
 # ============================================================
 
 def parse_groq_output(text):
@@ -1557,65 +1702,47 @@ def parse_groq_output(text):
 
     upper = text.upper()
 
+    category_marker = "CATEGORY:"
+    angle_marker = "ANGLE:"
+    draft_marker = "DRAFT:"
+
     category_pos = upper.find(
-        "CATEGORY"
+        category_marker
     )
 
     angle_pos = upper.find(
-        "ANGLE"
+        angle_marker
     )
 
     draft_pos = upper.find(
-        "DRAFT"
+        draft_marker
     )
 
-    source_pos = upper.find(
-        "SOURCE"
-    )
+    if category_pos == -1:
+        return None
 
-    if (
-        category_pos == -1
-        or angle_pos == -1
-        or draft_pos == -1
-        or source_pos == -1
-    ):
+    if angle_pos == -1:
+        return None
 
-        print(
-            "[GROQ PARSER] Required sections missing"
-        )
-
-        print(
-            text[:1500]
-        )
-
+    if draft_pos == -1:
         return None
 
     category = text[
-        category_pos + len("CATEGORY"):
+        category_pos
+        + len(category_marker):
         angle_pos
-    ].strip(
-        " :\n"
-    )
+    ].strip()
 
     angle = text[
-        angle_pos + len("ANGLE"):
+        angle_pos
+        + len(angle_marker):
         draft_pos
-    ].strip(
-        " :\n"
-    )
+    ].strip()
 
     draft = text[
-        draft_pos + len("DRAFT"):
-        source_pos
-    ].strip(
-        " :\n"
-    )
-
-    source = text[
-        source_pos + len("SOURCE"):
-    ].strip(
-        " :\n"
-    )
+        draft_pos
+        + len(draft_marker):
+    ].strip()
 
     if not category:
         return None
@@ -1626,9 +1753,6 @@ def parse_groq_output(text):
     if not draft:
         return None
 
-    # Always use the real URL supplied by the collector.
-    # This prevents Groq from accidentally inventing
-    # or altering the source URL.
     return {
 
         "category":
@@ -1638,10 +1762,8 @@ def parse_groq_output(text):
             angle,
 
         "draft":
-            draft,
+            draft
 
-        "source":
-            source
     }
 
 
@@ -1653,11 +1775,6 @@ def format_message(
     item,
     editorial
 ):
-
-    source_url = item.get(
-        "url",
-        ""
-    )
 
     return (
         "🧠 WEB3STATION\n\n"
@@ -1672,15 +1789,51 @@ def format_message(
         f"{editorial.get('draft', '')}\n\n"
 
         "SOURCE\n"
-        f"{source_url}"
+        f"{item.get('url', '')}"
     )
 
 
 # ============================================================
-# COLLECT ALL SOURCES
+# MAIN
 # ============================================================
 
-def collect_all():
+def main():
+
+    print(
+        "======================================"
+    )
+
+    print(
+        "WEB3STATION"
+    )
+
+    print(
+        "Simple Crypto Content Radar"
+    )
+
+    print(
+        now()
+    )
+
+    print(
+        "======================================"
+    )
+
+    seen = set(
+        load_json(
+            SEEN_FILE,
+            []
+        )
+    )
+
+    topic_history = load_json(
+        TOPIC_FILE,
+        []
+    )
+
+    # --------------------------------------------------------
+    # COLLECT
+    # --------------------------------------------------------
 
     collectors = [
 
@@ -1710,14 +1863,14 @@ def collect_all():
         ),
 
         (
-            "Neynar",
+            "Neynar / Farcaster",
             fetch_neynar
         ),
 
         (
             "Sorsa",
             fetch_sorsa
-        ),
+        )
 
     ]
 
@@ -1726,11 +1879,7 @@ def collect_all():
     for name, function in collectors:
 
         print(
-            "\n======================================"
-        )
-
-        print(
-            f"[COLLECTING] {name}"
+            f"\n[COLLECT] {name}"
         )
 
         try:
@@ -1739,7 +1888,7 @@ def collect_all():
 
             print(
                 f"[{name}] "
-                f"{len(items)} signals found"
+                f"{len(items)} signals"
             )
 
             all_items.extend(
@@ -1752,101 +1901,10 @@ def collect_all():
                 f"[{name} ERROR] {exc}"
             )
 
-    return all_items
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
     print(
-        "\n======================================"
-    )
-
-    print(
-        "WEB3STATION"
-    )
-
-    print(
-        "REAL CRYPTO CONTENT RADAR"
-    )
-
-    print(
-        now()
-    )
-
-    print(
-        "======================================\n"
-    )
-
-
-    # --------------------------------------------------------
-    # CHECK TELEGRAM FIRST
-    # --------------------------------------------------------
-
-    if not TELEGRAM_TOKEN:
-
-        print(
-            "[FATAL] TELEGRAM_TOKEN is missing"
-        )
-
-        return
-
-    if not TELEGRAM_CHAT_ID:
-
-        print(
-            "[FATAL] TELEGRAM_CHAT_ID is missing"
-        )
-
-        return
-
-    if not GROQ_API_KEY:
-
-        print(
-            "[FATAL] GROQ_API_KEY is missing"
-        )
-
-        return
-
-
-    # --------------------------------------------------------
-    # LOAD STATE
-    # --------------------------------------------------------
-
-    seen = set(
-        load_json(
-            SEEN_FILE,
-            []
-        )
-    )
-
-    topic_history = load_json(
-        TOPIC_FILE,
-        []
-    )
-
-
-    # --------------------------------------------------------
-    # COLLECT
-    # --------------------------------------------------------
-
-    all_items = collect_all()
-
-    print(
-        "\n======================================"
-    )
-
-    print(
-        f"TOTAL SIGNALS FOUND: "
+        f"\nTOTAL SIGNALS: "
         f"{len(all_items)}"
     )
-
-    print(
-        "======================================"
-    )
-
 
     # --------------------------------------------------------
     # REMOVE DUPLICATES
@@ -1875,7 +1933,9 @@ def main():
             item_id
         )
 
-        item["_score"] = relevance_score(
+        item[
+            "_score"
+        ] = relevance_score(
             item
         )
 
@@ -1883,9 +1943,8 @@ def main():
             item
         )
 
-
     # --------------------------------------------------------
-    # SORT STRONGER SIGNALS FIRST
+    # SORT
     # --------------------------------------------------------
 
     unique.sort(
@@ -1897,31 +1956,62 @@ def main():
         reverse=True
     )
 
-
     print(
-        f"NEW UNSENT SIGNALS: "
+        f"NEW SIGNALS: "
         f"{len(unique)}"
     )
 
+    # --------------------------------------------------------
+    # MAX ONE REPORT PER SOURCE
+    # --------------------------------------------------------
+
+    selected = []
+
+    source_count = {}
+
+    for item in unique:
+
+        source = item.get(
+            "source",
+            "Unknown"
+        )
+
+        source_count.setdefault(
+            source,
+            0
+        )
+
+        if source_count[source] >= 1:
+            continue
+
+        if item.get(
+            "_score",
+            0
+        ) < 2:
+
+            continue
+
+        selected.append(
+            item
+        )
+
+        source_count[source] += 1
+
+    print(
+        f"SELECTED REPORTS: "
+        f"{len(selected)}"
+    )
 
     # --------------------------------------------------------
-    # PROCESS EVERY NEW SIGNAL
+    # PROCESS
     # --------------------------------------------------------
 
     successful_ids = []
 
-    for index, item in enumerate(
-        unique,
-        start=1
-    ):
+    for item in selected:
 
         print(
             "\n--------------------------------------"
-        )
-
-        print(
-            f"PROCESSING "
-            f"{index}/{len(unique)}"
         )
 
         print(
@@ -1934,36 +2024,6 @@ def main():
             f"{item.get('title')}"
         )
 
-        print(
-            f"SCORE: "
-            f"{item.get('_score', 0)}"
-        )
-
-
-        # ----------------------------------------------------
-        # VERY WEAK SIGNALS
-        # ----------------------------------------------------
-
-        if item.get(
-            "_score",
-            0
-        ) < 2:
-
-            print(
-                "[SKIP] Signal below relevance threshold"
-            )
-
-            # Important:
-            # Do NOT mark weak signals as seen.
-            # They can be reconsidered later if
-            # the collector/source changes.
-            continue
-
-
-        # ----------------------------------------------------
-        # GROQ
-        # ----------------------------------------------------
-
         editorial = groq_edit(
             item
         )
@@ -1971,46 +2031,31 @@ def main():
         if not editorial:
 
             print(
-                "[RETRY LATER] Groq failed"
+                "[SKIP] Groq editorial failed"
             )
 
-            # Do NOT mark as seen.
             continue
-
-
-        # ----------------------------------------------------
-        # TELEGRAM
-        # ----------------------------------------------------
 
         message = format_message(
             item,
             editorial
         )
 
-
-        # Telegram maximum safe size
-        if len(message) > 4000:
+        if len(message) > 3900:
 
             message = (
-                message[:3950]
+                message[:3900]
                 + "\n\n[truncated]"
             )
-
 
         sent = send_telegram(
             message
         )
 
-
-        # ----------------------------------------------------
-        # ONLY SUCCESSFUL TELEGRAM SENDS
-        # BECOME SEEN
-        # ----------------------------------------------------
-
         if sent:
 
             print(
-                "[SUCCESS] Signal delivered to Telegram"
+                "[SENT]"
             )
 
             successful_ids.append(
@@ -2042,16 +2087,11 @@ def main():
         else:
 
             print(
-                "[FAILED] Telegram delivery failed"
+                "[NOT SENT]"
             )
-
-            print(
-                "[RETRY] Signal remains unseen"
-            )
-
 
     # --------------------------------------------------------
-    # SAVE SUCCESSFUL SIGNALS
+    # SAVE ONLY SUCCESSFUL
     # --------------------------------------------------------
 
     for item_id in successful_ids:
@@ -2060,21 +2100,18 @@ def main():
             item_id
         )
 
-
     save_json(
         SEEN_FILE,
-        list(seen)[-10000:]
+        list(seen)[-5000:]
     )
-
 
     save_json(
         TOPIC_FILE,
-        topic_history[-1000:]
+        topic_history[-500:]
     )
 
-
     # --------------------------------------------------------
-    # FINAL STATUS
+    # STATUS
     # --------------------------------------------------------
 
     print(
@@ -2082,7 +2119,7 @@ def main():
     )
 
     print(
-        "WEB3STATION RUN COMPLETE"
+        "RUN COMPLETE"
     )
 
     print(
@@ -2096,13 +2133,8 @@ def main():
     )
 
     print(
-        f"Successfully sent: "
+        f"Reports sent: "
         f"{len(successful_ids)}"
-    )
-
-    print(
-        f"Remaining for retry: "
-        f"{len(unique) - len(successful_ids)}"
     )
 
     print(
