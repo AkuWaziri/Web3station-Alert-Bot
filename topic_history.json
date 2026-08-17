@@ -634,5 +634,23 @@
     "source": "CoinDesk",
     "category": "Crypto Security",
     "title": "How a bug in Coldcard’s code went unnoticed for years, leading to $100 million in hacked funds"
+  },
+  {
+    "timestamp": "2026-08-17T23:24:56.792744+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "Crypto Infrastructure",
+    "title": "Farcaster discussion: AI agents"
+  },
+  {
+    "timestamp": "2026-08-17T23:24:58.223732+00:00",
+    "source": "Cointelegraph",
+    "category": "Crypto Regulation",
+    "title": "OCC approves Trump family crypto company for trust charter"
+  },
+  {
+    "timestamp": "2026-08-17T23:24:59.846931+00:00",
+    "source": "CoinDesk",
+    "category": "AI x Crypto Infrastructure",
+    "title": "Kraken parent Payward joins Anthropic’s Project Glasswing for AI security push"
   }
 ]
