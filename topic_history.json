@@ -466,5 +466,17 @@
     "source": "CoinDesk",
     "category": "Crypto Security",
     "title": "Crypto wallet SafePal reveals a data breach exposing nearly 40,000 customers' order info"
+  },
+  {
+    "timestamp": "2026-08-17T04:44:27.906907+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "Stablecoin Payments",
+    "title": "Farcaster discussion: stablecoin"
+  },
+  {
+    "timestamp": "2026-08-17T04:44:29.296613+00:00",
+    "source": "Cointelegraph",
+    "category": "Crypto Regulation",
+    "title": "Chainalysis sues US over $95M ICE contract with TRM Labs"
   }
 ]
