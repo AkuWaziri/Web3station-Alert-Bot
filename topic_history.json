@@ -778,5 +778,23 @@
     "source": "CoinDesk",
     "category": "Ethereum",
     "title": "Ethereum’s next upgrade breaks the '21,000 gas' rule wallets rely on"
+  },
+  {
+    "timestamp": "2026-08-18T13:43:49.219305+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "AI x Crypto Infrastructure",
+    "title": "Farcaster discussion: AI agents"
+  },
+  {
+    "timestamp": "2026-08-18T13:43:50.638028+00:00",
+    "source": "Cointelegraph",
+    "category": "Crypto Infrastructure",
+    "title": "MoonPay adds Cash App Pay for crypto purchases by US customers"
+  },
+  {
+    "timestamp": "2026-08-18T13:43:53.434310+00:00",
+    "source": "CoinDesk",
+    "category": "Crypto Infrastructure",
+    "title": "Citi plans to launch bitcoin custody for institutional clients later this year"
   }
 ]
