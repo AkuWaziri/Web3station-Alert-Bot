@@ -1108,5 +1108,17 @@
     "source": "CoinDesk",
     "category": "DeFi",
     "title": "Crypto Long & Short: Where DeFi yield really comes from (and why it broke this spring)"
+  },
+  {
+    "timestamp": "2026-08-19T17:28:37.847892+00:00",
+    "source": "Farcaster / Neynar",
+    "category": "AI Agents",
+    "title": "Farcaster discussion: AI agents"
+  },
+  {
+    "timestamp": "2026-08-19T17:28:39.206283+00:00",
+    "source": "Cointelegraph",
+    "category": "Crypto Infrastructure",
+    "title": "StanChart, HSBC execute first live transaction on Swift blockchain ledger"
   }
 ]
